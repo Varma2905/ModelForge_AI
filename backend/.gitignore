@@ -1,0 +1,17 @@
+# Environment variables — never commit real secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local data / generated artifacts
+data/db.json
+static/graphs/*
+static/reports/*
+!static/graphs/.gitkeep
+!static/reports/.gitkeep
+app/models/saved_models/*.pkl

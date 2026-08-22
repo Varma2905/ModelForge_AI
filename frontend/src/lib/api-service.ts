@@ -7,6 +7,15 @@ import type {
   AIExplainResult,
   AuthPayload,
   AuthUser,
+  BaasApiKey,
+  BaasApiKeyCreateResult,
+  BaasColumn,
+  BaasCredentials,
+  BaasProject,
+  BaasProjectCreateResult,
+  BaasRecord,
+  BaasRecordListResult,
+  BaasTable,
   ChartData,
   ChatResult,
   ConnectionInput,
@@ -161,6 +170,30 @@ async function getBlob(path: string): Promise<Blob> {
     throw new ApiError(res.status, message);
   }
   return res.blob();
+}
+
+// --- Backend as a Service: public data API ---
+// Deliberately NOT routed through request()/authHeaders() — these calls are
+// authenticated with a project's public/secret key pair (X-Public-Key /
+// X-Secret-Key headers), never the Studio's own JWT. Used by the Studio's
+// own "Data" tab (baas.$projectId.tsx), which asks the user to paste their
+// project's secret key inline rather than reading any stored auth state.
+function baasHeaders(creds: BaasCredentials): Record<string, string> {
+  const headers: Record<string, string> = { "X-Public-Key": creds.publicKey };
+  if (creds.secretKey) headers["X-Secret-Key"] = creds.secretKey;
+  return headers;
+}
+
+async function baasRequest<T>(path: string, creds: BaasCredentials, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${getApiBaseUrl()}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...baasHeaders(creds),
+      ...(init?.headers ?? {}),
+    },
+  });
+  return unwrap<T>(res);
 }
 
 // --- AI Assistant streaming chat ---
@@ -360,6 +393,50 @@ export const api = {
 
   // Database AI Query
   askDatabaseQuestion: (payload: NLQueryRequest) => post<NLQueryResult>("/db-query/ask", payload),
+
+  // Backend as a Service — management (Studio JWT)
+  createBaasProject: (name: string) => post<BaasProjectCreateResult>("/baas/projects", { name }),
+  listBaasProjects: () => get<BaasProject[]>("/baas/projects"),
+  getBaasProject: (id: string) => get<BaasProject>(`/baas/projects/${id}`),
+  deleteBaasProject: (id: string) => del<{ deleted: boolean }>(`/baas/projects/${id}`),
+  createBaasKey: (projectId: string, label?: string) =>
+    post<BaasApiKeyCreateResult>(`/baas/projects/${projectId}/keys`, { label }),
+  listBaasKeys: (projectId: string) => get<BaasApiKey[]>(`/baas/projects/${projectId}/keys`),
+  revokeBaasKey: (projectId: string, keyId: string) =>
+    post<{ revoked: boolean }>(`/baas/projects/${projectId}/keys/${keyId}/revoke`),
+  proposeBaasSchema: (projectId: string, description: string) =>
+    post<{ columns: BaasColumn[] }>(`/baas/projects/${projectId}/tables/propose-schema`, { description }),
+  createBaasTable: (projectId: string, payload: { name: string; columns: BaasColumn[] }) =>
+    post<BaasTable>(`/baas/projects/${projectId}/tables`, payload),
+  listBaasTables: (projectId: string) => get<BaasTable[]>(`/baas/projects/${projectId}/tables`),
+
+  // Backend as a Service — public data API (public/secret key, not JWT)
+  listBaasRecords: (creds: BaasCredentials, tableName: string, limit = 50) =>
+    baasRequest<BaasRecordListResult>(
+      `/baas/data/${encodeURIComponent(tableName)}?limit=${limit}`,
+      creds,
+    ),
+  getBaasRecord: (creds: BaasCredentials, tableName: string, recordId: string) =>
+    baasRequest<BaasRecord>(`/baas/data/${encodeURIComponent(tableName)}/${recordId}`, creds),
+  createBaasRecord: (creds: BaasCredentials, tableName: string, data: Record<string, unknown>) =>
+    baasRequest<BaasRecord>(`/baas/data/${encodeURIComponent(tableName)}`, creds, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateBaasRecord: (
+    creds: BaasCredentials,
+    tableName: string,
+    recordId: string,
+    data: Record<string, unknown>,
+  ) =>
+    baasRequest<BaasRecord>(`/baas/data/${encodeURIComponent(tableName)}/${recordId}`, creds, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  deleteBaasRecord: (creds: BaasCredentials, tableName: string, recordId: string) =>
+    baasRequest<{ deleted: boolean }>(`/baas/data/${encodeURIComponent(tableName)}/${recordId}`, creds, {
+      method: "DELETE",
+    }),
 };
 
 export type { ChartData };

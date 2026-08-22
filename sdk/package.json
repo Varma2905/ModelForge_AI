@@ -1,0 +1,20 @@
+{
+  "name": "@regression-studio/baas-sdk",
+  "version": "0.1.0",
+  "description": "Client SDK for apps built on a Regression Analysis Studio backend-as-a-service project.",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

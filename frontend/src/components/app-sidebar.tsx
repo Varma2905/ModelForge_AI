@@ -12,6 +12,7 @@ import {
   ChevronsUpDown,
   Plug,
   Boxes,
+  Rocket,
 } from "lucide-react";
 import {
   Sidebar,
@@ -41,6 +42,7 @@ const items = [
   { title: "New Analysis", url: "/new/upload", icon: Sparkles },
   { title: "Data Sources", url: "/data-sources", icon: Plug },
   { title: "Hugging Face Models", url: "/hf-models", icon: Boxes },
+  { title: "Projects", url: "/baas", icon: Rocket },
   { title: "Dataset History", url: "/history", icon: Database },
   { title: "Compare Models", url: "/compare", icon: GitCompare },
   { title: "Reports", url: "/reports", icon: FileText },

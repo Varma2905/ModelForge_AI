@@ -19,6 +19,7 @@ import { Route as DataSourcesRouteImport } from './routes/data-sources'
 import { Route as CompareRouteImport } from './routes/compare'
 import { Route as AssistantRouteImport } from './routes/assistant'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as BaasIndexRouteImport } from './routes/baas.index'
 import { Route as NewVisualizeRouteImport } from './routes/new.visualize'
 import { Route as NewVariablesRouteImport } from './routes/new.variables'
 import { Route as NewUploadRouteImport } from './routes/new.upload'
@@ -31,6 +32,7 @@ import { Route as NewModelRouteImport } from './routes/new.model'
 import { Route as NewMetricsRouteImport } from './routes/new.metrics'
 import { Route as NewExplainRouteImport } from './routes/new.explain'
 import { Route as ModelsModelIdRouteImport } from './routes/models.$modelId'
+import { Route as BaasProjectIdRouteImport } from './routes/baas.$projectId'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -80,6 +82,11 @@ const AssistantRoute = AssistantRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BaasIndexRoute = BaasIndexRouteImport.update({
+  id: '/baas/',
+  path: '/baas/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NewVisualizeRoute = NewVisualizeRouteImport.update({
@@ -142,6 +149,11 @@ const ModelsModelIdRoute = ModelsModelIdRouteImport.update({
   path: '/models/$modelId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BaasProjectIdRoute = BaasProjectIdRouteImport.update({
+  id: '/baas/$projectId',
+  path: '/baas/$projectId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -154,6 +166,7 @@ export interface FileRoutesByFullPath {
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
+  '/baas/$projectId': typeof BaasProjectIdRoute
   '/models/$modelId': typeof ModelsModelIdRoute
   '/new/explain': typeof NewExplainRoute
   '/new/metrics': typeof NewMetricsRoute
@@ -166,6 +179,7 @@ export interface FileRoutesByFullPath {
   '/new/upload': typeof NewUploadRoute
   '/new/variables': typeof NewVariablesRoute
   '/new/visualize': typeof NewVisualizeRoute
+  '/baas/': typeof BaasIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -178,6 +192,7 @@ export interface FileRoutesByTo {
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
+  '/baas/$projectId': typeof BaasProjectIdRoute
   '/models/$modelId': typeof ModelsModelIdRoute
   '/new/explain': typeof NewExplainRoute
   '/new/metrics': typeof NewMetricsRoute
@@ -190,6 +205,7 @@ export interface FileRoutesByTo {
   '/new/upload': typeof NewUploadRoute
   '/new/variables': typeof NewVariablesRoute
   '/new/visualize': typeof NewVisualizeRoute
+  '/baas': typeof BaasIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -203,6 +219,7 @@ export interface FileRoutesById {
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
+  '/baas/$projectId': typeof BaasProjectIdRoute
   '/models/$modelId': typeof ModelsModelIdRoute
   '/new/explain': typeof NewExplainRoute
   '/new/metrics': typeof NewMetricsRoute
@@ -215,6 +232,7 @@ export interface FileRoutesById {
   '/new/upload': typeof NewUploadRoute
   '/new/variables': typeof NewVariablesRoute
   '/new/visualize': typeof NewVisualizeRoute
+  '/baas/': typeof BaasIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -229,6 +247,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/settings'
     | '/signup'
+    | '/baas/$projectId'
     | '/models/$modelId'
     | '/new/explain'
     | '/new/metrics'
@@ -241,6 +260,7 @@ export interface FileRouteTypes {
     | '/new/upload'
     | '/new/variables'
     | '/new/visualize'
+    | '/baas/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -253,6 +273,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/settings'
     | '/signup'
+    | '/baas/$projectId'
     | '/models/$modelId'
     | '/new/explain'
     | '/new/metrics'
@@ -265,6 +286,7 @@ export interface FileRouteTypes {
     | '/new/upload'
     | '/new/variables'
     | '/new/visualize'
+    | '/baas'
   id:
     | '__root__'
     | '/'
@@ -277,6 +299,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/settings'
     | '/signup'
+    | '/baas/$projectId'
     | '/models/$modelId'
     | '/new/explain'
     | '/new/metrics'
@@ -289,6 +312,7 @@ export interface FileRouteTypes {
     | '/new/upload'
     | '/new/variables'
     | '/new/visualize'
+    | '/baas/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -302,6 +326,7 @@ export interface RootRouteChildren {
   ReportsRoute: typeof ReportsRoute
   SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
+  BaasProjectIdRoute: typeof BaasProjectIdRoute
   ModelsModelIdRoute: typeof ModelsModelIdRoute
   NewExplainRoute: typeof NewExplainRoute
   NewMetricsRoute: typeof NewMetricsRoute
@@ -314,6 +339,7 @@ export interface RootRouteChildren {
   NewUploadRoute: typeof NewUploadRoute
   NewVariablesRoute: typeof NewVariablesRoute
   NewVisualizeRoute: typeof NewVisualizeRoute
+  BaasIndexRoute: typeof BaasIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -386,6 +412,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/baas/': {
+      id: '/baas/'
+      path: '/baas'
+      fullPath: '/baas/'
+      preLoaderRoute: typeof BaasIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/new/visualize': {
@@ -472,6 +505,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ModelsModelIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/baas/$projectId': {
+      id: '/baas/$projectId'
+      path: '/baas/$projectId'
+      fullPath: '/baas/$projectId'
+      preLoaderRoute: typeof BaasProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -486,6 +526,7 @@ const rootRouteChildren: RootRouteChildren = {
   ReportsRoute: ReportsRoute,
   SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,
+  BaasProjectIdRoute: BaasProjectIdRoute,
   ModelsModelIdRoute: ModelsModelIdRoute,
   NewExplainRoute: NewExplainRoute,
   NewMetricsRoute: NewMetricsRoute,
@@ -498,6 +539,7 @@ const rootRouteChildren: RootRouteChildren = {
   NewUploadRoute: NewUploadRoute,
   NewVariablesRoute: NewVariablesRoute,
   NewVisualizeRoute: NewVisualizeRoute,
+  BaasIndexRoute: BaasIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

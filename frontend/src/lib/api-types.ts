@@ -366,3 +366,59 @@ export type HFRunModelResult = {
   metrics: ModelMetrics;
   version_warning: string | null;
 };
+
+// --- Backend as a Service ---
+export type BaasProject = {
+  id: string;
+  name: string;
+  created_at: string;
+};
+
+export type BaasProjectCreateResult = {
+  project: BaasProject;
+  public_key: string;
+  secret_key: string;
+};
+
+export type BaasApiKey = {
+  id: string;
+  public_key: string;
+  label: string | null;
+  disabled: boolean;
+  created_at: string;
+};
+
+export type BaasApiKeyCreateResult = {
+  key: BaasApiKey;
+  secret_key: string;
+};
+
+export type BaasColumnType = "string" | "number" | "boolean" | "date";
+
+export type BaasColumn = {
+  name: string;
+  type: BaasColumnType;
+};
+
+export type BaasTable = {
+  id: string;
+  name: string;
+  columns: BaasColumn[];
+  created_at: string;
+};
+
+export type BaasRecord = {
+  id: string;
+  created_at: string;
+  updated_at: string;
+} & Record<string, unknown>;
+
+export type BaasRecordListResult = {
+  records: BaasRecord[];
+  total_count: number;
+};
+
+export type BaasCredentials = {
+  publicKey: string;
+  secretKey?: string;
+};

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # A model can only be labeled "inference_only" if BOTH signals line up: a
 # sklearn/skops tag/library AND an actual serialized-estimator file in the
@@ -17,11 +17,29 @@ class CompatibilityResult:
     execution_mode: str  # "inference_only" | "fine_tune_required" | "unsupported"
     confidence: str  # "high" | "medium" | "low"
     reasons: List[str] = field(default_factory=list)
+    artifact_file: Optional[str] = None
 
 
 def _is_numeric_dtype(dtype_str: str) -> bool:
     d = dtype_str.lower()
     return "int" in d or "float" in d
+
+
+def pick_artifact_file(files: List[str]) -> Optional[str]:
+    """Picks the single file execution should download/load, preferring the
+    safest/most-standard format first. Shared by the compatibility check
+    (to decide inference_only) and the /run endpoint (to know what to
+    actually load) — kept in one place so they can never disagree."""
+    by_ext: Dict[str, str] = {}
+    for f in files:
+        lower = f.lower()
+        for ext in (".skops", ".joblib", ".pkl"):
+            if lower.endswith(ext) and ext not in by_ext:
+                by_ext[ext] = f
+    for ext in (".skops", ".joblib", ".pkl"):
+        if ext in by_ext:
+            return by_ext[ext]
+    return None
 
 
 def assess_regression_compatibility(
@@ -42,6 +60,7 @@ def assess_regression_compatibility(
     has_tabular_task_signal = pipeline_tag in _TABULAR_PIPELINE_TAGS or "tabular-regression" in tags
 
     if has_tabular_lib_signal and has_artifact:
+        artifact_file = pick_artifact_file(files)
         reasons.append(
             f"Repository is tagged as a {library_name or 'sklearn/skops'} model and contains a "
             "serialized estimator file that can be loaded directly."
@@ -51,9 +70,9 @@ def assess_regression_compatibility(
         ]
         if not numeric_cols:
             reasons.append("Your dataset has no numeric columns — a sklearn/skops estimator expects numeric input.")
-            return CompatibilityResult(False, "unsupported", "medium", reasons)
+            return CompatibilityResult(False, "unsupported", "medium", reasons, artifact_file)
         reasons.append(f"Your dataset has {len(numeric_cols)} numeric column(s) usable as input features.")
-        return CompatibilityResult(True, "inference_only", "medium", reasons)
+        return CompatibilityResult(True, "inference_only", "medium", reasons, artifact_file)
 
     if has_tabular_task_signal:
         reasons.append(

@@ -50,6 +50,8 @@ export type DatasetModelListItem = {
   model: string;
   metrics: ModelMetrics;
   created_at: string;
+  source?: "huggingface" | null;
+  hf_model_id?: string | null;
 };
 
 // --- Preprocessing ---
@@ -138,6 +140,8 @@ export type ModelListItem = {
   model: string;
   metrics: ModelMetrics;
   created_at: string;
+  source?: "huggingface" | null;
+  hf_model_id?: string | null;
 };
 
 // --- Prediction ---
@@ -319,4 +323,20 @@ export type HFCompatibilityResult = {
   execution_mode: HFExecutionMode;
   confidence: "high" | "medium" | "low";
   reasons: string[];
+  artifact_file: string | null;
+};
+
+export type HFRunModelRequest = {
+  dataset_id: string;
+  features: string[];
+  target: string;
+};
+
+export type HFRunModelResult = {
+  status: string;
+  model_id: string;
+  hf_model_id: string;
+  source: "huggingface";
+  metrics: ModelMetrics;
+  version_warning: string | null;
 };

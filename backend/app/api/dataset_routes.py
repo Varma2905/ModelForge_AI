@@ -217,5 +217,7 @@ async def list_dataset_models(
             "model": m["model"],
             "metrics": m["metrics"],
             "created_at": m.get("created_at"),
+            "source": m.get("source"),
+            "hf_model_id": m.get("hf_model_id"),
         } for m in sorted_models
     ]))

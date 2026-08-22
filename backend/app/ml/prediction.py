@@ -53,8 +53,11 @@ def predict_with_model(model_id: str, input_values: Dict[str, float]) -> float:
         
     # 4. Predict
     prediction = model.predict(X)
-    
-    # Extract scalar value from prediction
-    if isinstance(prediction, np.ndarray):
-        return float(prediction[0])
-    return float(prediction)
+
+    # Extract scalar value from prediction. Locally-trained models always
+    # return a 1D array (fit on a pandas Series target), but externally
+    # sourced models (e.g. Hugging Face) can return a 2D column vector
+    # instead — reshape(-1) normalizes either case to a flat array before
+    # indexing, since float() on a >0-d array raises in current numpy.
+    pred_array = np.asarray(prediction).reshape(-1)
+    return float(pred_array[0])

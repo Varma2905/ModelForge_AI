@@ -22,6 +22,8 @@ import type {
   HFCompatibilityResult,
   HFModelDetails,
   HFModelSummary,
+  HFRunModelRequest,
+  HFRunModelResult,
   ImportDatasetResult,
   ImportTableRequest,
   ModelListItem,
@@ -351,6 +353,8 @@ export const api = {
     post<HFCompatibilityResult>(`/hf/models/${encodeURIComponent(modelId)}/check-compatibility`, {
       dataset_id: datasetId,
     }),
+  runHfModel: (modelId: string, payload: HFRunModelRequest) =>
+    post<HFRunModelResult>(`/hf/models/${encodeURIComponent(modelId)}/run`, payload),
 };
 
 export type { ChartData };

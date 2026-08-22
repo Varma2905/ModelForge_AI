@@ -1,9 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -30,12 +32,23 @@ import {
   XCircle,
   AlertTriangle,
   ShieldQuestion,
+  PlayCircle,
 } from "lucide-react";
-import { useHfSearch, useHfCompatibilityCheck } from "@/hooks/use-hf-models";
-import { useDatasetsList } from "@/hooks/use-datasets";
+import { useHfSearch, useHfCompatibilityCheck, useRunHfModel } from "@/hooks/use-hf-models";
+import { useDatasetsList, usePreviewDataset } from "@/hooks/use-datasets";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
-import type { HFCompatibilityResult, HFExecutionMode, HFModelSummary } from "@/lib/api-types";
+import type {
+  HFCompatibilityResult,
+  HFExecutionMode,
+  HFModelSummary,
+  HFRunModelResult,
+} from "@/lib/api-types";
+
+function isNumericDtype(dtype: string) {
+  const d = dtype.toLowerCase();
+  return d.includes("int") || d.includes("float");
+}
 
 export const Route = createFileRoute("/hf-models")({
   beforeLoad: requireAuth,
@@ -68,24 +81,70 @@ function CompatibilityDialog({ model }: { model: HFModelSummary }) {
   const [datasetId, setDatasetId] = useState<string | null>(null);
   const [result, setResult] = useState<HFCompatibilityResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [target, setTarget] = useState<string | null>(null);
+  const [features, setFeatures] = useState<string[]>([]);
+  const [runResult, setRunResult] = useState<HFRunModelResult | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const { data: datasets, isLoading: datasetsLoading } = useDatasetsList();
   const checkMutation = useHfCompatibilityCheck();
+  const runMutation = useRunHfModel();
+  const previewQuery = usePreviewDataset(
+    result?.execution_mode === "inference_only" ? datasetId : null,
+  );
+
+  const numericColumns =
+    previewQuery.data?.columns.filter((c) => isNumericDtype(previewQuery.data!.data_types[c] ?? "")) ?? [];
+
+  useEffect(() => {
+    if (numericColumns.length > 0 && !target) {
+      const lastCol = numericColumns[numericColumns.length - 1];
+      setTarget(lastCol);
+      setFeatures(numericColumns.filter((c) => c !== lastCol));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewQuery.data]);
 
   const reset = () => {
     setDatasetId(null);
     setResult(null);
     setError(null);
+    setTarget(null);
+    setFeatures([]);
+    setRunResult(null);
+    setRunError(null);
   };
 
   const handleCheck = async () => {
     if (!datasetId) return;
     setError(null);
+    setRunResult(null);
+    setRunError(null);
+    setTarget(null);
+    setFeatures([]);
     try {
       const res = await checkMutation.mutateAsync({ modelId: model.model_id, datasetId });
       setResult(res);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Compatibility check failed.");
+    }
+  };
+
+  const toggleFeature = (col: string) => {
+    setFeatures((prev) => (prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]));
+  };
+
+  const handleRun = async () => {
+    if (!datasetId || !target || features.length === 0) return;
+    setRunError(null);
+    try {
+      const res = await runMutation.mutateAsync({
+        modelId: model.model_id,
+        payload: { dataset_id: datasetId, features, target },
+      });
+      setRunResult(res);
+    } catch (err) {
+      setRunError(err instanceof ApiError ? err.message : "Model execution failed.");
     }
   };
 
@@ -155,6 +214,115 @@ function CompatibilityDialog({ model }: { model: HFModelSummary }) {
                   <li key={i}>{r}</li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {result?.execution_mode === "inference_only" && !runResult && (
+            <div className="space-y-3 border-t pt-4">
+              {previewQuery.isLoading ? (
+                <Skeleton className="h-24 w-full" />
+              ) : numericColumns.length < 2 ? (
+                <p className="text-sm text-muted-foreground">
+                  This dataset needs at least 2 numeric columns (1 target + 1 feature) to run
+                  inference.
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label>Target column</Label>
+                    <Select
+                      value={target ?? undefined}
+                      onValueChange={(v) => {
+                        setTarget(v);
+                        setFeatures((prev) => prev.filter((c) => c !== v));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select target" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {numericColumns.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Feature columns</Label>
+                    <div className="max-h-32 overflow-y-auto space-y-1.5 rounded-md border p-2">
+                      {numericColumns
+                        .filter((c) => c !== target)
+                        .map((c) => (
+                          <div key={c} className="flex items-center gap-2">
+                            <Checkbox
+                              id={`feat-${c}`}
+                              checked={features.includes(c)}
+                              onCheckedChange={() => toggleFeature(c)}
+                            />
+                            <Label htmlFor={`feat-${c}`} className="font-normal text-sm">
+                              {c}
+                            </Label>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+
+                  {runError && (
+                    <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                      <XCircle className="h-4 w-4 flex-shrink-0" />
+                      <span>{runError}</span>
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleRun}
+                    disabled={!target || features.length === 0 || runMutation.isPending}
+                    className="w-full"
+                  >
+                    {runMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                    ) : (
+                      <PlayCircle className="h-4 w-4 mr-1.5" />
+                    )}
+                    Run inference
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+
+          {runResult && (
+            <div className="space-y-3 border-t pt-4">
+              <div className="flex items-center gap-2 rounded-md border border-green-600/30 bg-green-600/10 px-3 py-2 text-sm font-medium text-green-700 dark:text-green-400">
+                <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                <span>Model executed — real zero-shot metrics on your data</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                <div className="rounded-md border p-2">
+                  <p className="text-xs text-muted-foreground">R²</p>
+                  <p className="font-semibold">{runResult.metrics.R2.toFixed(3)}</p>
+                </div>
+                <div className="rounded-md border p-2">
+                  <p className="text-xs text-muted-foreground">RMSE</p>
+                  <p className="font-semibold">{runResult.metrics.RMSE.toFixed(3)}</p>
+                </div>
+                <div className="rounded-md border p-2">
+                  <p className="text-xs text-muted-foreground">MAE</p>
+                  <p className="font-semibold">{runResult.metrics.MAE.toFixed(3)}</p>
+                </div>
+              </div>
+              {runResult.version_warning && (
+                <p className="text-xs text-muted-foreground">
+                  Note: {runResult.version_warning}
+                </p>
+              )}
+              <Button asChild variant="outline" className="w-full">
+                <Link to="/models/$modelId" params={{ modelId: runResult.model_id }}>
+                  View model details
+                </Link>
+              </Button>
             </div>
           )}
         </div>

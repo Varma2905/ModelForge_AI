@@ -118,6 +118,11 @@ function ComparePage() {
                               <span className="flex items-center gap-2">
                                 {isBest && <Trophy className="h-3.5 w-3.5 text-emerald-500" />}
                                 {m.model}
+                                {m.source === "huggingface" && (
+                                  <Badge variant="outline" className="text-xs font-normal">
+                                    Hugging Face
+                                  </Badge>
+                                )}
                               </span>
                             </td>
                             <td>

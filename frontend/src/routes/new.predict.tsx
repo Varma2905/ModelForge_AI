@@ -89,7 +89,7 @@ function PredictPage() {
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-indigo-600 to-fuchsia-600 text-white">
+        <Card className="bg-[image:var(--gradient-brand)] text-white border-0 shadow-xl shadow-primary/20">
           <CardHeader>
             <CardTitle className="text-white">Predicted Value</CardTitle>
           </CardHeader>

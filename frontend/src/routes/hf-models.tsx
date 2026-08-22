@@ -36,6 +36,8 @@ import {
 } from "lucide-react";
 import { useHfSearch, useHfCompatibilityCheck, useRunHfModel } from "@/hooks/use-hf-models";
 import { useDatasetsList, usePreviewDataset } from "@/hooks/use-datasets";
+import { GradientIcon } from "@/components/gradient-icon";
+import { EmptyState } from "@/components/empty-state";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
 import type {
@@ -62,12 +64,12 @@ const EXECUTION_MODE_META: Record<
   inference_only: {
     label: "Ready to run",
     icon: CheckCircle2,
-    className: "border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400",
+    className: "border-success/30 bg-success/10 text-success",
   },
   fine_tune_required: {
     label: "Fine-tuning required",
     icon: AlertTriangle,
-    className: "border-amber-600/30 bg-amber-600/10 text-amber-700 dark:text-amber-400",
+    className: "border-warning/30 bg-warning/10 text-warning",
   },
   unsupported: {
     label: "Not compatible",
@@ -340,12 +342,10 @@ function CompatibilityDialog({ model }: { model: HFModelSummary }) {
 
 function ModelCard({ model }: { model: HFModelSummary }) {
   return (
-    <Card>
+    <Card variant="glass" className="card-interactive">
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start gap-3">
-          <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center text-white flex-shrink-0">
-            <Boxes className="h-5 w-5" />
-          </div>
+          <GradientIcon icon={Boxes} />
           <div className="min-w-0 flex-1">
             <p className="font-medium truncate" title={model.model_id}>
               {model.model_id}
@@ -418,15 +418,12 @@ function HfModelsPage() {
 
       {!submittedQuery && !isFetched ? (
         <Card>
-          <CardContent className="p-10 text-center">
-            <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mx-auto mb-3">
-              <Boxes className="h-6 w-6 text-muted-foreground" />
-            </div>
-            <p className="font-medium">Search the Hugging Face Hub</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Try a single keyword — the Hub's search matches model names and tags, not full
-              phrases.
-            </p>
+          <CardContent className="p-10">
+            <EmptyState
+              icon={Boxes}
+              title="Search the Hugging Face Hub"
+              description="Try a single keyword — the Hub's search matches model names and tags, not full phrases."
+            />
           </CardContent>
         </Card>
       ) : isLoading ? (
@@ -443,9 +440,8 @@ function HfModelsPage() {
         </Card>
       ) : !data || data.length === 0 ? (
         <Card>
-          <CardContent className="p-10 text-center">
-            <p className="font-medium">No models found</p>
-            <p className="text-sm text-muted-foreground mt-1">Try a different search term.</p>
+          <CardContent className="p-10">
+            <EmptyState icon={Search} title="No models found" description="Try a different search term." />
           </CardContent>
         </Card>
       ) : (

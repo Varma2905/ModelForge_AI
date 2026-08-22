@@ -7,6 +7,7 @@ import { useAnalysis } from "@/lib/analysis-store";
 import { useDownloadReport } from "@/hooks/use-reports";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
+import { downloadBlob } from "@/lib/download-blob";
 import { Download, FileText, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -23,14 +24,7 @@ function ReportPage() {
     if (!state.modelId) return;
     try {
       const blob = await downloadReport.mutateAsync(state.modelId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `regression-report-${state.modelId}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `regression-report-${state.modelId}.pdf`);
       toast.success("PDF report downloaded");
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Failed to generate PDF report");

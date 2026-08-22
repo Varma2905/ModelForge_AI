@@ -25,12 +25,15 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Rocket, PlusCircle, Loader2, Trash2, Copy, Check, AlertTriangle } from "lucide-react";
+import { Rocket, PlusCircle, Loader2, Trash2, AlertTriangle } from "lucide-react";
 import {
   useBaasProjects,
   useCreateBaasProject,
   useDeleteBaasProject,
 } from "@/hooks/use-baas";
+import { CopyableSecret } from "@/components/copyable-secret";
+import { GradientIcon } from "@/components/gradient-icon";
+import { EmptyState } from "@/components/empty-state";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
 import type { BaasProject, BaasProjectCreateResult } from "@/lib/api-types";
@@ -39,34 +42,6 @@ export const Route = createFileRoute("/baas/")({
   beforeLoad: requireAuth,
   component: BaasPage,
 });
-
-function CopyableSecret({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <div className="flex items-center gap-2">
-        <code className="flex-1 rounded-md border bg-muted/50 px-2 py-1.5 text-xs font-mono break-all">
-          {value}
-        </code>
-        <Button
-          type="button"
-          size="icon"
-          variant="outline"
-          className="flex-shrink-0"
-          onClick={() => {
-            navigator.clipboard?.writeText(value).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1200);
-            });
-          }}
-        >
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 function CreateProjectDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
@@ -116,7 +91,7 @@ function CreateProjectDialog({ onCreated }: { onCreated: () => void }) {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-start gap-2 rounded-md border border-amber-600/30 bg-amber-600/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
               <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
               <span>
                 The secret key is shown only this once and cannot be retrieved again. Copy both keys now and
@@ -157,12 +132,10 @@ function ProjectCard({ project, onDeleted }: { project: BaasProject; onDeleted: 
   };
 
   return (
-    <Card>
+    <Card variant="glass" className="card-interactive">
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start gap-3">
-          <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center text-white flex-shrink-0">
-            <Rocket className="h-5 w-5" />
-          </div>
+          <GradientIcon icon={Rocket} />
           <div className="min-w-0 flex-1">
             <p className="font-medium truncate">{project.name}</p>
             <p className="text-xs text-muted-foreground truncate">
@@ -231,14 +204,12 @@ function BaasPage() {
         </Card>
       ) : !data || data.length === 0 ? (
         <Card>
-          <CardContent className="p-10 text-center">
-            <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mx-auto mb-3">
-              <Rocket className="h-6 w-6 text-muted-foreground" />
-            </div>
-            <p className="font-medium">No backend projects yet</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Create a backend project to get a project ID, public/secret keys, and a generic data API.
-            </p>
+          <CardContent className="p-10">
+            <EmptyState
+              icon={Rocket}
+              title="No backend projects yet"
+              description="Create a backend project to get a project ID, public/secret keys, and a generic data API."
+            />
           </CardContent>
         </Card>
       ) : (

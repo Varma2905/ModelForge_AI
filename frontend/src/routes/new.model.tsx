@@ -72,7 +72,8 @@ function ModelPage() {
           return (
             <Card
               key={m.name}
-              className={`cursor-pointer transition hover:border-primary ${selected ? "border-primary ring-2 ring-primary/30" : ""}`}
+              variant="glass"
+              className={`card-interactive cursor-pointer ${selected ? "border-primary ring-2 ring-primary/30" : ""}`}
               onClick={() => update({ model: m.name })}
             >
               <CardContent className="p-5 space-y-3">
@@ -90,7 +91,7 @@ function ModelPage() {
                 </div>
                 <Button
                   size="sm"
-                  variant={selected ? "default" : "outline"}
+                  variant={selected ? "gradient" : "outline"}
                   className="w-full"
                   onClick={(e) => {
                     e.stopPropagation();

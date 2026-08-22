@@ -68,7 +68,7 @@ function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-600 via-purple-600 to-fuchsia-600 p-4">
+    <div className="gradient-animated min-h-screen flex items-center justify-center bg-[image:var(--gradient-brand)] p-4">
       <div className="w-full max-w-md">
         <div className="flex items-center justify-center gap-2 mb-6 text-white">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/15 backdrop-blur">

@@ -57,6 +57,9 @@ import {
   useTestSavedDataSource,
 } from "@/hooks/use-data-sources";
 import { useAskDatabaseQuestion, useExportDbQueryReport } from "@/hooks/use-db-query";
+import { GradientIcon } from "@/components/gradient-icon";
+import { EmptyState } from "@/components/empty-state";
+import { downloadBlob } from "@/lib/download-blob";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
 import type {
@@ -76,11 +79,6 @@ const ENGINE_LABEL: Record<DataSourceEngine, string> = {
   postgresql: "PostgreSQL",
   mongodb: "MongoDB",
 };
-
-function EngineIcon({ engine, className }: { engine: DataSourceEngine; className?: string }) {
-  if (engine === "mongodb") return <Leaf className={className} />;
-  return <Database className={className} />;
-}
 
 type FormState = {
   name: string;
@@ -369,14 +367,7 @@ function AskQuestionDialog({ source }: { source: DataSourceSummary }) {
     if (!result) return;
     try {
       const blob = await exportMutation.mutateAsync({ ...result, question: askedQuestion });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "database-query-report.pdf";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, "database-query-report.pdf");
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Failed to generate PDF report");
     }
@@ -570,12 +561,10 @@ function DataSourceCard({ source }: { source: DataSourceSummary }) {
   const statusKnown = lastTest !== null || source.last_test_status !== null;
 
   return (
-    <Card>
+    <Card variant="glass" className="card-interactive">
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start gap-3">
-          <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center text-white flex-shrink-0">
-            <EngineIcon engine={source.engine} className="h-5 w-5" />
-          </div>
+          <GradientIcon icon={source.engine === "mongodb" ? Leaf : Database} />
           <div className="min-w-0 flex-1">
             <p className="font-medium truncate">{source.name}</p>
             <p className="text-xs text-muted-foreground truncate">
@@ -657,14 +646,12 @@ function DataSourcesPage() {
         </Card>
       ) : !data || data.length === 0 ? (
         <Card>
-          <CardContent className="p-10 text-center">
-            <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mx-auto mb-3">
-              <Plug className="h-6 w-6 text-muted-foreground" />
-            </div>
-            <p className="font-medium">No data sources connected</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Connect a MySQL, PostgreSQL, or MongoDB database to analyze its data directly.
-            </p>
+          <CardContent className="p-10">
+            <EmptyState
+              icon={Plug}
+              title="No data sources connected"
+              description="Connect a MySQL, PostgreSQL, or MongoDB database to analyze its data directly."
+            />
           </CardContent>
         </Card>
       ) : (

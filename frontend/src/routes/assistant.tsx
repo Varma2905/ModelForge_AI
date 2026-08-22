@@ -1,15 +1,31 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Plus, Trash2, MessageSquare, Eraser, Database } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import {
+  Sparkles,
+  Plus,
+  Trash2,
+  MessageSquare,
+  Eraser,
+  Database,
+  ArrowRight,
+} from "lucide-react";
 import { AiChatPanel } from "@/components/ai-chat-panel";
+import { GradientIcon } from "@/components/gradient-icon";
 import { useAiChat } from "@/hooks/use-ai-chat";
+import { useModelMetrics } from "@/hooks/use-training";
 import { api } from "@/lib/api-service";
 import { requireAuth } from "@/lib/require-auth";
 
+type AssistantSearch = { prefill?: string };
+
 export const Route = createFileRoute("/assistant")({
   beforeLoad: requireAuth,
+  validateSearch: (search: Record<string, unknown>): AssistantSearch => ({
+    prefill: typeof search.prefill === "string" ? search.prefill : undefined,
+  }),
   component: AssistantPage,
 });
 
@@ -23,8 +39,8 @@ const SUGGESTIONS = [
 ];
 
 function AssistantPage() {
+  const { prefill } = Route.useSearch();
   const [contextModelId, setContextModelId] = useState<string | null>(null);
-  const [contextLabel, setContextLabel] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,9 +48,7 @@ function AssistantPage() {
       .listModels()
       .then((models) => {
         if (cancelled || models.length === 0) return;
-        const latest = models[0];
-        setContextModelId(latest.model_id);
-        setContextLabel(`${latest.dataset_name} — ${latest.model}`);
+        setContextModelId(models[0].model_id);
       })
       .catch(() => {
         // No trained models yet, or request failed — chat still works, just without context.
@@ -45,19 +59,25 @@ function AssistantPage() {
   }, []);
 
   const chat = useAiChat({ persistKey: "assistant", contextModelId });
+  const contextQuery = useModelMetrics(contextModelId);
+  const context = contextQuery.data;
+  const contextLabel = context ? `${context.model}` : null;
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-indigo-500" /> AI Assistant
+          <Sparkles className="h-5 w-5 text-primary" /> AI Assistant
         </h1>
         <p className="text-sm text-muted-foreground">
           Get expert help with regression analysis, model selection, and result interpretation.
         </p>
       </div>
 
-      <Card className="grid grid-cols-1 md:grid-cols-[240px_1fr] overflow-hidden" style={{ height: "72vh" }}>
+      <Card
+        className="grid grid-cols-1 md:grid-cols-[220px_1fr] lg:grid-cols-[220px_1fr_260px] overflow-hidden"
+        style={{ height: "72vh" }}
+      >
         {/* Conversation list */}
         <div className="hidden md:flex flex-col border-r min-h-0">
           <div className="p-3 border-b">
@@ -129,11 +149,10 @@ function AssistantPage() {
             streaming={chat.streaming}
             placeholder="Ask me anything about your regression analysis…"
             suggestions={SUGGESTIONS}
+            initialInput={prefill}
             emptyState={
               <div className="h-full flex flex-col items-center justify-center text-center gap-2 py-10">
-                <div className="h-12 w-12 rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center text-white mb-1">
-                  <Sparkles className="h-6 w-6" />
-                </div>
+                <GradientIcon icon={Sparkles} shape="circle" size="lg" className="mb-1" />
                 <p className="font-medium">Start a conversation</p>
                 <p className="text-sm text-muted-foreground max-w-xs">
                   Ask anything about your regression analysis — model selection, R², RMSE, p-values, or how to
@@ -142,6 +161,68 @@ function AssistantPage() {
               </div>
             }
           />
+        </div>
+
+        {/* Context panel */}
+        <div className="hidden lg:flex flex-col border-l min-h-0 overflow-y-auto">
+          <div className="p-4 border-b">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Current Context
+            </p>
+          </div>
+          {contextQuery.isLoading ? (
+            <div className="p-4 text-xs text-muted-foreground">Loading…</div>
+          ) : context ? (
+            <div className="p-4 space-y-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Model</p>
+                <p className="text-sm font-medium">{context.model}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Target</p>
+                <p className="text-sm font-medium">{context.target}</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <p className="text-[10px] text-muted-foreground">R²</p>
+                  <Badge variant="secondary" className="mt-0.5">
+                    {context.metrics.R2.toFixed(3)}
+                  </Badge>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground">RMSE</p>
+                  <Badge variant="secondary" className="mt-0.5">
+                    {context.metrics.RMSE.toFixed(2)}
+                  </Badge>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground">MAE</p>
+                  <Badge variant="secondary" className="mt-0.5">
+                    {context.metrics.MAE.toFixed(2)}
+                  </Badge>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">Features</p>
+                <div className="flex flex-wrap gap-1">
+                  {context.features.map((f) => (
+                    <Badge key={f} variant="outline" className="text-[10px] font-normal">
+                      {f}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+              <Button asChild size="sm" variant="outline" className="w-full">
+                <Link to="/models/$modelId" params={{ modelId: context.model_id }}>
+                  View full details <ArrowRight className="ml-1.5 h-3 w-3" />
+                </Link>
+              </Button>
+            </div>
+          ) : (
+            <div className="p-4 text-xs text-muted-foreground">
+              Train a model to see its context here — R², RMSE, MAE, and features.
+            </div>
+          )}
         </div>
       </Card>
     </div>

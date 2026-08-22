@@ -41,8 +41,6 @@ import {
   PlusCircle,
   Loader2,
   Trash2,
-  Copy,
-  Check,
   AlertTriangle,
   Sparkles,
   Ban,
@@ -61,6 +59,7 @@ import {
   useUpdateBaasRecord,
   useDeleteBaasRecord,
 } from "@/hooks/use-baas";
+import { CopyableSecret } from "@/components/copyable-secret";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
 import type {
@@ -76,34 +75,6 @@ export const Route = createFileRoute("/baas/$projectId")({
   beforeLoad: requireAuth,
   component: ProjectDetailPage,
 });
-
-function CopyableSecret({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <div className="flex items-center gap-2">
-        <code className="flex-1 rounded-md border bg-muted/50 px-2 py-1.5 text-xs font-mono break-all">
-          {value}
-        </code>
-        <Button
-          type="button"
-          size="icon"
-          variant="outline"
-          className="flex-shrink-0"
-          onClick={() => {
-            navigator.clipboard?.writeText(value).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1200);
-            });
-          }}
-        >
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 // ── Keys tab ─────────────────────────────────────────────────────────────
 function CreateKeyDialog({ projectId, onCreated }: { projectId: string; onCreated: () => void }) {
@@ -146,7 +117,7 @@ function CreateKeyDialog({ projectId, onCreated }: { projectId: string; onCreate
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-start gap-2 rounded-md border border-amber-600/30 bg-amber-600/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
               <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
               <span>The secret key is shown only this once. Copy both keys now.</span>
             </div>

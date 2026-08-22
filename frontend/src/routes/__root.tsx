@@ -20,6 +20,9 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider, themeInitScript } from "@/lib/theme";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { UserMenu } from "@/components/user-menu";
+import { CommandMenuProvider, CommandMenuTrigger } from "@/components/command-menu";
 
 function NotFoundComponent() {
   return (
@@ -185,21 +188,32 @@ function AppShell() {
   }
 
   return (
-    <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-background">
-        <AppSidebar />
-        <div className="flex-1 flex flex-col min-w-0">
-          <header className="h-14 border-b flex items-center gap-3 px-4 sticky top-0 bg-background/80 backdrop-blur z-10">
-            <SidebarTrigger />
-            <div className="text-sm font-medium">AI Regression Studio</div>
-            <div className="ml-auto text-xs text-muted-foreground">Agentic AI · v1.0</div>
-          </header>
-          <main className="flex-1 p-6">
-            <Outlet />
-          </main>
+    <CommandMenuProvider>
+      <SidebarProvider>
+        <div className="min-h-screen flex w-full bg-background">
+          <AppSidebar />
+          <div className="flex-1 flex flex-col min-w-0">
+            <header className="h-14 border-b border-border flex items-center gap-3 px-4 sticky top-0 bg-background/80 backdrop-blur z-10">
+              <SidebarTrigger />
+              <div className="text-sm font-medium">AI Regression Studio</div>
+              <div className="ml-auto flex items-center gap-1">
+                <CommandMenuTrigger />
+                <ThemeToggle />
+                <span className="hidden sm:inline text-xs text-muted-foreground mx-1">
+                  Agentic AI · v1.0
+                </span>
+                <UserMenu variant="topbar" />
+              </div>
+            </header>
+            <main className="flex-1 p-6">
+              <div key={pathname} className="page-enter">
+                <Outlet />
+              </div>
+            </main>
+          </div>
         </div>
-      </div>
-      <Toaster richColors position="top-right" />
-    </SidebarProvider>
+        <Toaster richColors position="top-right" />
+      </SidebarProvider>
+    </CommandMenuProvider>
   );
 }

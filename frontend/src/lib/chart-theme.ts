@@ -39,17 +39,19 @@ export function useChartTheme(): ChartTheme {
     const background = readVar("--background", isDark ? "#0f172a" : "#ffffff");
     const card = readVar("--card", isDark ? "#1e293b" : "#ffffff");
 
-    // Series palette tuned to work on both light and dark backgrounds.
+    // Series palette tuned to work on both light and dark backgrounds, kept
+    // in sync with the brand hues defined in styles.css (chart libraries
+    // need literal color strings, not CSS custom properties).
     const series = isDark
       ? {
-          primary: "#818cf8",
+          primary: "#8b5cf6",
           accent: "#22d3ee",
           success: "#34d399",
           warning: "#fbbf24",
-          danger: "#f472b6",
+          danger: "#f87171",
         }
       : {
-          primary: "#6366f1",
+          primary: "#7c3aed",
           accent: "#0891b2",
           success: "#10b981",
           warning: "#f59e0b",

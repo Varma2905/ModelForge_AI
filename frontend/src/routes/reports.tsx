@@ -1,38 +1,125 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FileText, Download, Loader2, PlusCircle } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { FileText, Download, Eye, Loader2 } from "lucide-react";
 import { useModelsList } from "@/hooks/use-training";
 import { useDownloadReport } from "@/hooks/use-reports";
+import { GradientIcon } from "@/components/gradient-icon";
+import { EmptyState } from "@/components/empty-state";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
+import { downloadBlob } from "@/lib/download-blob";
 import { toast } from "sonner";
+import type { ModelListItem } from "@/lib/api-types";
 
 export const Route = createFileRoute("/reports")({
   beforeLoad: requireAuth,
   component: ReportsPage,
 });
 
-function ReportsPage() {
-  const { data, isLoading, isError } = useModelsList();
-  const downloadReport = useDownloadReport();
+function ReportCard({ model }: { model: ModelListItem }) {
+  const downloadMutation = useDownloadReport();
+  const previewMutation = useDownloadReport();
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
-  const download = async (modelId: string) => {
+  // Object URLs are only valid for this tab's lifetime — release it once the
+  // dialog is dismissed so the blob doesn't linger in memory.
+  useEffect(() => {
+    if (!previewOpen && previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+  }, [previewOpen, previewUrl]);
+
+  const handleDownload = async () => {
     try {
-      const blob = await downloadReport.mutateAsync(modelId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `regression-report-${modelId}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const blob = await downloadMutation.mutateAsync(model.model_id);
+      downloadBlob(blob, `regression-report-${model.model_id}.pdf`);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Failed to generate PDF report");
     }
   };
+
+  const handlePreview = async () => {
+    try {
+      // Same download endpoint as the button below — rendered inline instead
+      // of triggering a save, not a separate/fake preview capability.
+      const blob = await previewMutation.mutateAsync(model.model_id);
+      setPreviewUrl(URL.createObjectURL(blob));
+      setPreviewOpen(true);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to generate PDF report");
+    }
+  };
+
+  return (
+    <Card variant="glass" className="card-interactive">
+      <CardContent className="p-5">
+        <div className="flex items-start gap-3">
+          <GradientIcon icon={FileText} />
+          <div className="flex-1 min-w-0">
+            <div className="font-medium truncate">
+              {model.dataset_name} — {model.model}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {model.created_at ? new Date(model.created_at).toLocaleDateString() : "—"}
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1"
+            onClick={handlePreview}
+            disabled={previewMutation.isPending}
+          >
+            {previewMutation.isPending ? (
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+            ) : (
+              <Eye className="h-3 w-3 mr-1" />
+            )}
+            Preview
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1"
+            onClick={handleDownload}
+            disabled={downloadMutation.isPending}
+          >
+            {downloadMutation.isPending ? (
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+            ) : (
+              <Download className="h-3 w-3 mr-1" />
+            )}
+            Download
+          </Button>
+        </div>
+      </CardContent>
+
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-4xl h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>
+              {model.dataset_name} — {model.model}
+            </DialogTitle>
+          </DialogHeader>
+          {previewUrl && (
+            <iframe src={previewUrl} title="Report preview" className="flex-1 w-full rounded-md border" />
+          )}
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
+function ReportsPage() {
+  const { data, isLoading, isError } = useModelsList();
 
   return (
     <div className="space-y-6">
@@ -58,57 +145,20 @@ function ReportsPage() {
         </Card>
       ) : !data || data.length === 0 ? (
         <Card>
-          <CardContent className="p-10 text-center">
-            <p className="text-sm font-medium">No reports yet</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Train a model to generate your first PDF report.
-            </p>
-            <Button asChild size="sm" className="mt-4">
-              <Link to="/new/upload">
-                <PlusCircle className="h-3.5 w-3.5 mr-1.5" /> New Analysis
-              </Link>
-            </Button>
+          <CardContent className="p-10">
+            <EmptyState
+              icon={FileText}
+              title="No reports yet"
+              description="Train a model to generate your first PDF report."
+              action={{ label: "New Analysis", to: "/new/upload" }}
+            />
           </CardContent>
         </Card>
       ) : (
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {data.map((m) => {
-            const isDownloading =
-              downloadReport.isPending && downloadReport.variables === m.model_id;
-            return (
-              <Card key={m.model_id}>
-                <CardContent className="p-5">
-                  <div className="flex items-start gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center text-white">
-                      <FileText className="h-5 w-5" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">
-                        {m.dataset_name} — {m.model}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {m.created_at ? new Date(m.created_at).toLocaleDateString() : "—"}
-                      </div>
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full mt-4"
-                    onClick={() => download(m.model_id)}
-                    disabled={isDownloading}
-                  >
-                    {isDownloading ? (
-                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                    ) : (
-                      <Download className="h-3 w-3 mr-1" />
-                    )}
-                    Download
-                  </Button>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {data.map((m) => (
+            <ReportCard key={m.model_id} model={m} />
+          ))}
         </div>
       )}
     </div>

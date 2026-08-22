@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Bot, User, Sparkles, Send, Loader2, Square, Check, Copy, ArrowDown, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatMarkdown } from "@/components/chat-markdown";
+import { GradientIcon } from "@/components/gradient-icon";
 import type { ChatMessage } from "@/hooks/use-ai-chat";
 
 function CopyButton({ text }: { text: string }) {
@@ -48,11 +49,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
   return (
     <div className={`flex gap-3 ${isUser ? "justify-end" : ""}`}>
-      {!isUser && (
-        <div className="h-9 w-9 rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center text-white flex-shrink-0">
-          <Bot className="h-5 w-5" />
-        </div>
-      )}
+      {!isUser && <GradientIcon icon={Bot} shape="circle" size="sm" className="h-9 w-9" />}
       <div
         className={`group rounded-2xl px-4 py-2.5 max-w-[80%] text-sm ${
           isUser ? "bg-primary text-primary-foreground whitespace-pre-wrap" : "bg-muted"
@@ -109,6 +106,7 @@ export function AiChatPanel({
   emptyState,
   suggestions,
   headerActions,
+  initialInput,
 }: {
   messages: ChatMessage[];
   onSend: (text: string) => void;
@@ -119,8 +117,10 @@ export function AiChatPanel({
   emptyState?: ReactNode;
   suggestions?: string[];
   headerActions?: ReactNode;
+  /** Pre-fills the input box, unsent — the user still reviews/edits before sending. */
+  initialInput?: string;
 }) {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialInput ?? "");
   const busy = sending || streaming;
 
   const scrollRef = useRef<HTMLDivElement>(null);

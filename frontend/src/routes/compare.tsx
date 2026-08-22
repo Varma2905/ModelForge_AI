@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Select,
   SelectContent,
@@ -11,9 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { EmptyState } from "@/components/empty-state";
 import { useDatasetsList, useDatasetModels } from "@/hooks/use-datasets";
 import { requireAuth } from "@/lib/require-auth";
-import { GitCompare, PlusCircle, Trophy } from "lucide-react";
+import { GitCompare, MessageCircleQuestion, Trophy } from "lucide-react";
 
 export const Route = createFileRoute("/compare")({
   beforeLoad: requireAuth,
@@ -31,6 +33,7 @@ function ComparePage() {
   }, [datasetsQuery.data, selectedDatasetId]);
 
   const modelsQuery = useDatasetModels(selectedDatasetId);
+  const datasetName = datasetsQuery.data?.find((d) => d.dataset_id === selectedDatasetId)?.name;
 
   const bestModelId =
     modelsQuery.data && modelsQuery.data.length > 0
@@ -39,6 +42,14 @@ function ComparePage() {
           modelsQuery.data[0],
         ).model_id
       : null;
+
+  const comparePrompt = useMemo(() => {
+    if (!modelsQuery.data || modelsQuery.data.length === 0 || !datasetName) return null;
+    const lines = modelsQuery.data
+      .map((m) => `${m.model}: R² ${typeof m.metrics.R2 === "number" ? m.metrics.R2.toFixed(3) : "—"}`)
+      .join(", ");
+    return `Compare these models trained on ${datasetName} and tell me which one I should use and why: ${lines}.`;
+  }, [modelsQuery.data, datasetName]);
 
   return (
     <div className="space-y-6">
@@ -55,16 +66,13 @@ function ComparePage() {
         <Skeleton className="h-10 w-64" />
       ) : !datasetsQuery.data || datasetsQuery.data.length === 0 ? (
         <Card>
-          <CardContent className="p-10 text-center">
-            <p className="text-sm font-medium">No datasets yet</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Upload a dataset and train a couple of models to compare them here.
-            </p>
-            <Button asChild size="sm" className="mt-4">
-              <Link to="/new/upload">
-                <PlusCircle className="h-3.5 w-3.5 mr-1.5" /> New Analysis
-              </Link>
-            </Button>
+          <CardContent className="p-10">
+            <EmptyState
+              icon={GitCompare}
+              title="No datasets yet"
+              description="Upload a dataset and train a couple of models to compare them here."
+              action={{ label: "New Analysis", to: "/new/upload" }}
+            />
           </CardContent>
         </Card>
       ) : (
@@ -83,8 +91,15 @@ function ComparePage() {
           </Select>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
               <CardTitle>Model Comparison</CardTitle>
+              {comparePrompt && (
+                <Button asChild size="sm" variant="outline">
+                  <Link to="/assistant" search={{ prefill: comparePrompt }}>
+                    <MessageCircleQuestion className="h-3.5 w-3.5 mr-1.5" /> Ask AI to Compare
+                  </Link>
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
               {modelsQuery.isLoading ? (
@@ -94,64 +109,59 @@ function ComparePage() {
                   No models trained on this dataset yet. Train one via New Analysis.
                 </p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left text-muted-foreground">
-                        <th className="pb-2">Model</th>
-                        <th>R²</th>
-                        <th>MAE</th>
-                        <th>RMSE</th>
-                        <th>MSE</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {modelsQuery.data.map((m) => {
-                        const isBest = m.model_id === bestModelId;
-                        return (
-                          <tr
-                            key={m.model_id}
-                            className={`border-b ${isBest ? "bg-emerald-50 dark:bg-emerald-950/20" : ""}`}
-                          >
-                            <td className="py-3 font-medium">
-                              <span className="flex items-center gap-2">
-                                {isBest && <Trophy className="h-3.5 w-3.5 text-emerald-500" />}
-                                {m.model}
-                                {m.source === "huggingface" && (
-                                  <Badge variant="outline" className="text-xs font-normal">
-                                    Hugging Face
-                                  </Badge>
-                                )}
-                              </span>
-                            </td>
-                            <td>
-                              <Badge variant={isBest ? "default" : "secondary"}>
-                                {typeof m.metrics.R2 === "number" ? m.metrics.R2.toFixed(3) : "—"}
-                              </Badge>
-                            </td>
-                            <td>
-                              {typeof m.metrics.MAE === "number" ? m.metrics.MAE.toFixed(3) : "—"}
-                            </td>
-                            <td>
-                              {typeof m.metrics.RMSE === "number" ? m.metrics.RMSE.toFixed(3) : "—"}
-                            </td>
-                            <td>
-                              {typeof m.metrics.MSE === "number" ? m.metrics.MSE.toFixed(0) : "—"}
-                            </td>
-                            <td className="text-right">
-                              <Button asChild variant="ghost" size="sm">
-                                <Link to="/models/$modelId" params={{ modelId: m.model_id }}>
-                                  View
-                                </Link>
-                              </Button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Model</TableHead>
+                      <TableHead>R²</TableHead>
+                      <TableHead>MAE</TableHead>
+                      <TableHead>RMSE</TableHead>
+                      <TableHead>MSE</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {modelsQuery.data.map((m) => {
+                      const isBest = m.model_id === bestModelId;
+                      return (
+                        <TableRow key={m.model_id} className={isBest ? "bg-success/10" : undefined}>
+                          <TableCell className="font-medium">
+                            <span className="flex items-center gap-2">
+                              {isBest && <Trophy className="h-3.5 w-3.5 text-success" />}
+                              {m.model}
+                              {m.source === "huggingface" && (
+                                <Badge variant="outline" className="text-xs font-normal">
+                                  Hugging Face
+                                </Badge>
+                              )}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={isBest ? "default" : "secondary"}>
+                              {typeof m.metrics.R2 === "number" ? m.metrics.R2.toFixed(3) : "—"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {typeof m.metrics.MAE === "number" ? m.metrics.MAE.toFixed(3) : "—"}
+                          </TableCell>
+                          <TableCell>
+                            {typeof m.metrics.RMSE === "number" ? m.metrics.RMSE.toFixed(3) : "—"}
+                          </TableCell>
+                          <TableCell>
+                            {typeof m.metrics.MSE === "number" ? m.metrics.MSE.toFixed(0) : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button asChild variant="ghost" size="sm">
+                              <Link to="/models/$modelId" params={{ modelId: m.model_id }}>
+                                View
+                              </Link>
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
               )}
             </CardContent>
           </Card>

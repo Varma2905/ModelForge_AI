@@ -31,7 +31,8 @@ export function WizardSteps() {
                 to={s.url}
                 className={cn(
                   "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition",
-                  active && "bg-primary text-primary-foreground",
+                  active &&
+                    "bg-[image:var(--gradient-brand)] text-white shadow-[0_0_12px_oklch(0.606_0.219_292.717_/_0.4)]",
                   done && "text-foreground hover:bg-accent",
                   !active && !done && "text-muted-foreground hover:bg-accent",
                 )}
@@ -39,8 +40,8 @@ export function WizardSteps() {
                 <span
                   className={cn(
                     "flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold",
-                    active && "bg-primary-foreground text-primary",
-                    done && "bg-emerald-500 text-white",
+                    active && "bg-white/25 text-white",
+                    done && "bg-success text-success-foreground",
                     !active && !done && "bg-muted text-muted-foreground",
                   )}
                 >

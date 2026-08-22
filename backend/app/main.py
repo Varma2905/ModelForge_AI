@@ -26,6 +26,7 @@ from app.api.dashboard_routes import router as dashboard_router
 from app.api.data_sources import router as data_sources_router
 from app.api.hf_routes import router as hf_router
 from app.api.db_query_routes import router as db_query_router
+from app.api.baas_routes import baas_management_router, baas_public_router
 from app.utils.crypto import warn_if_unconfigured as warn_if_encryption_key_unconfigured
 from app.utils.response import err
 
@@ -39,13 +40,49 @@ app = FastAPI(
 _allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3001,http://localhost:8001")
 allowed_origins = [origin.strip() for origin in _allowed_origins.split(",") if origin.strip()]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+def _is_baas_public_path(path: str) -> bool:
+    return path.startswith("/baas/data") or path.startswith("/baas/end-users")
+
+
+class PathAwareCORSMiddleware:
+    """Applies open CORS (any origin) to the BaaS public SDK surface
+    (/baas/data/*, /baas/end-users/*) and the existing strict ALLOWED_ORIGINS
+    policy to everything else, including /baas/projects/* management routes.
+
+    NOTE: mounting a separate FastAPI sub-app with its own CORSMiddleware
+    does NOT achieve this — Starlette middleware wraps the whole ASGI app
+    including anything routed to a Mount, so the outer CORSMiddleware
+    intercepts (and, for a disallowed origin, rejects) preflight OPTIONS
+    requests before they ever reach a mounted sub-app's own middleware.
+    Confirmed by testing: an OPTIONS preflight to /baas/data/* with an
+    arbitrary Origin returned the strict policy's 400 rejection even with a
+    sub-app mounted at /baas with allow_origins=["*"]. This middleware
+    instead wraps a single app twice (open + strict CORSMiddleware, both
+    pointing at the same inner app) and picks which wrapped call to invoke
+    per-request based on path — no sub-app/Mount involved.
+    """
+
+    def __init__(self, app, strict_origins: list[str]):
+        self.strict_cors = CORSMiddleware(
+            app, allow_origins=strict_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+        )
+        # allow_credentials=False is correct and required here: BaaS auth is
+        # header-based (X-Public-Key/X-Secret-Key/Bearer), not cookie-based,
+        # so there's no CORS credentials mode to reconcile with the wildcard
+        # origin (browsers reject allow_origins=["*"] + allow_credentials=True).
+        self.open_cors = CORSMiddleware(
+            app, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
+        )
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and _is_baas_public_path(scope.get("path", "")):
+            await self.open_cors(scope, receive, send)
+        else:
+            await self.strict_cors(scope, receive, send)
+
+
+app.add_middleware(PathAwareCORSMiddleware, strict_origins=allowed_origins)
 
 # Resolve absolute path to the static directory
 static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static"))
@@ -68,6 +105,8 @@ app.include_router(dashboard_router)
 app.include_router(data_sources_router)
 app.include_router(hf_router)
 app.include_router(db_query_router)
+app.include_router(baas_management_router)
+app.include_router(baas_public_router, prefix="/baas")
 
 # Database connection events
 @app.on_event("startup")

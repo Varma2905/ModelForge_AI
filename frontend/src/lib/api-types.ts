@@ -291,3 +291,32 @@ export type ImportDatasetResult = DatasetSummary & {
   truncated: boolean;
   row_limit_applied: number;
 };
+
+// --- Hugging Face Models ---
+export type HFModelSummary = {
+  model_id: string;
+  author: string | null;
+  pipeline_tag: string | null;
+  library_name: string | null;
+  tags: string[];
+  downloads: number | null;
+  likes: number | null;
+  last_modified: string | null;
+};
+
+export type HFModelDetails = HFModelSummary & {
+  license: string | null;
+  files: string[];
+  gated: boolean;
+};
+
+export type HFExecutionMode = "inference_only" | "fine_tune_required" | "unsupported";
+
+export type HFCompatibilityResult = {
+  model_id: string;
+  dataset_id: string;
+  compatible: boolean;
+  execution_mode: HFExecutionMode;
+  confidence: "high" | "medium" | "low";
+  reasons: string[];
+};

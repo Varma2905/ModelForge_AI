@@ -19,6 +19,9 @@ import type {
   DatasetPreview,
   DatasetSummary,
   GraphsResult,
+  HFCompatibilityResult,
+  HFModelDetails,
+  HFModelSummary,
   ImportDatasetResult,
   ImportTableRequest,
   ModelListItem,
@@ -333,6 +336,21 @@ export const api = {
     ),
   importDataSourceTable: (id: string, payload: ImportTableRequest) =>
     post<ImportDatasetResult>(`/data-sources/${id}/import`, payload),
+
+  // Hugging Face Models
+  searchHfModels: (params: { query?: string; task?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params.query) qs.set("query", params.query);
+    if (params.task) qs.set("task", params.task);
+    if (params.limit) qs.set("limit", String(params.limit));
+    return get<HFModelSummary[]>(`/hf/search?${qs.toString()}`);
+  },
+  getHfModel: (modelId: string) =>
+    get<HFModelDetails>(`/hf/models/${encodeURIComponent(modelId)}`),
+  checkHfCompatibility: (modelId: string, datasetId: string) =>
+    post<HFCompatibilityResult>(`/hf/models/${encodeURIComponent(modelId)}/check-compatibility`, {
+      dataset_id: datasetId,
+    }),
 };
 
 export type { ChartData };

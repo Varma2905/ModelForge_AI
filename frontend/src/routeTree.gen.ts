@@ -14,6 +14,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as HistoryRouteImport } from './routes/history'
+import { Route as HfModelsRouteImport } from './routes/hf-models'
 import { Route as DataSourcesRouteImport } from './routes/data-sources'
 import { Route as CompareRouteImport } from './routes/compare'
 import { Route as AssistantRouteImport } from './routes/assistant'
@@ -54,6 +55,11 @@ const LoginRoute = LoginRouteImport.update({
 const HistoryRoute = HistoryRouteImport.update({
   id: '/history',
   path: '/history',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HfModelsRoute = HfModelsRouteImport.update({
+  id: '/hf-models',
+  path: '/hf-models',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DataSourcesRoute = DataSourcesRouteImport.update({
@@ -142,6 +148,7 @@ export interface FileRoutesByFullPath {
   '/assistant': typeof AssistantRoute
   '/compare': typeof CompareRoute
   '/data-sources': typeof DataSourcesRoute
+  '/hf-models': typeof HfModelsRoute
   '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
   '/reports': typeof ReportsRoute
@@ -165,6 +172,7 @@ export interface FileRoutesByTo {
   '/assistant': typeof AssistantRoute
   '/compare': typeof CompareRoute
   '/data-sources': typeof DataSourcesRoute
+  '/hf-models': typeof HfModelsRoute
   '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
   '/reports': typeof ReportsRoute
@@ -189,6 +197,7 @@ export interface FileRoutesById {
   '/assistant': typeof AssistantRoute
   '/compare': typeof CompareRoute
   '/data-sources': typeof DataSourcesRoute
+  '/hf-models': typeof HfModelsRoute
   '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
   '/reports': typeof ReportsRoute
@@ -214,6 +223,7 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/compare'
     | '/data-sources'
+    | '/hf-models'
     | '/history'
     | '/login'
     | '/reports'
@@ -237,6 +247,7 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/compare'
     | '/data-sources'
+    | '/hf-models'
     | '/history'
     | '/login'
     | '/reports'
@@ -260,6 +271,7 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/compare'
     | '/data-sources'
+    | '/hf-models'
     | '/history'
     | '/login'
     | '/reports'
@@ -284,6 +296,7 @@ export interface RootRouteChildren {
   AssistantRoute: typeof AssistantRoute
   CompareRoute: typeof CompareRoute
   DataSourcesRoute: typeof DataSourcesRoute
+  HfModelsRoute: typeof HfModelsRoute
   HistoryRoute: typeof HistoryRoute
   LoginRoute: typeof LoginRoute
   ReportsRoute: typeof ReportsRoute
@@ -338,6 +351,13 @@ declare module '@tanstack/react-router' {
       path: '/history'
       fullPath: '/history'
       preLoaderRoute: typeof HistoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/hf-models': {
+      id: '/hf-models'
+      path: '/hf-models'
+      fullPath: '/hf-models'
+      preLoaderRoute: typeof HfModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/data-sources': {
@@ -460,6 +480,7 @@ const rootRouteChildren: RootRouteChildren = {
   AssistantRoute: AssistantRoute,
   CompareRoute: CompareRoute,
   DataSourcesRoute: DataSourcesRoute,
+  HfModelsRoute: HfModelsRoute,
   HistoryRoute: HistoryRoute,
   LoginRoute: LoginRoute,
   ReportsRoute: ReportsRoute,

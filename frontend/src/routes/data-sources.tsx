@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Database,
+  FileDown,
   Leaf,
   Loader2,
   Plug,
@@ -55,7 +56,7 @@ import {
   useTestConnection,
   useTestSavedDataSource,
 } from "@/hooks/use-data-sources";
-import { useAskDatabaseQuestion } from "@/hooks/use-db-query";
+import { useAskDatabaseQuestion, useExportDbQueryReport } from "@/hooks/use-db-query";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
 import type {
@@ -327,17 +328,20 @@ function AskQuestionDialog({ source }: { source: DataSourceSummary }) {
   const [database, setDatabase] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<NLQueryResult | null>(null);
+  const [askedQuestion, setAskedQuestion] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [datasetName, setDatasetName] = useState("");
 
   const databasesQuery = useDataSourceDatabases(open ? source.id : null);
   const askMutation = useAskDatabaseQuestion();
   const importMutation = useImportDataSourceTable();
+  const exportMutation = useExportDbQueryReport();
 
   const reset = () => {
     setDatabase(null);
     setQuestion("");
     setResult(null);
+    setAskedQuestion("");
     setError(null);
     setDatasetName("");
   };
@@ -347,11 +351,34 @@ function AskQuestionDialog({ source }: { source: DataSourceSummary }) {
     setError(null);
     setResult(null);
     try {
-      const res = await askMutation.mutateAsync({ data_source_id: source.id, database, question: question.trim() });
+      const asked = question.trim();
+      const res = await askMutation.mutateAsync({
+        data_source_id: source.id,
+        database,
+        question: asked,
+      });
       setResult(res);
-      setDatasetName(question.trim().slice(0, 60));
+      setAskedQuestion(asked);
+      setDatasetName(asked.slice(0, 60));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to answer the question.");
+    }
+  };
+
+  const handleExportReport = async () => {
+    if (!result) return;
+    try {
+      const blob = await exportMutation.mutateAsync({ ...result, question: askedQuestion });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "database-query-report.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to generate PDF report");
     }
   };
 
@@ -496,6 +523,14 @@ function AskQuestionDialog({ source }: { source: DataSourceSummary }) {
                     <Save className="h-4 w-4 mr-1.5" />
                   )}
                   Save as dataset
+                </Button>
+                <Button onClick={handleExportReport} disabled={exportMutation.isPending} variant="outline">
+                  {exportMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                  ) : (
+                    <FileDown className="h-4 w-4 mr-1.5" />
+                  )}
+                  Export PDF
                 </Button>
               </div>
             </div>

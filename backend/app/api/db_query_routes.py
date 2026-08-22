@@ -1,13 +1,17 @@
 import json
 import logging
-from typing import Any, Dict, List
+import os
+import uuid
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_user
 from app.connectors import ConnectorError, TableSchema, get_connector
 from app.database.mongodb import db_client
+from app.reports.pdf_generator import build_db_query_report
 from app.services.nl_query_service import NLQueryError, explain_result, generate_query
 from app.services.query_service import validate_mongo_query_spec, validate_select_sql
 from app.utils.crypto import decrypt_secret
@@ -19,6 +23,9 @@ logger = logging.getLogger("regression_studio.db_query_routes")
 router = APIRouter(prefix="/db-query", tags=["Database AI Query"])
 
 RESULT_ROW_LIMIT = 200
+
+STATIC_REPORTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "static", "reports"))
+os.makedirs(STATIC_REPORTS_DIR, exist_ok=True)
 
 _NL_ERROR_STATUS = {
     "not_configured": status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -140,4 +147,50 @@ async def ask_database_question(request: AskQuestionRequest, current_user: dict 
             "truncated": result.truncated,
             "explanation": explanation,
         }
+    )
+
+
+class ExportQueryReportRequest(BaseModel):
+    question: str
+    engine: str
+    query: Any
+    columns: List[str]
+    rows: List[List[Any]]
+    row_count_returned: int
+    truncated: bool
+    explanation: Optional[str] = None
+
+
+@router.post("/export")
+async def export_query_report(
+    request: ExportQueryReportRequest, current_user: dict = Depends(get_current_user)
+):
+    # Takes the already-fetched result straight from the client rather than
+    # re-running the query — the query itself was already validated
+    # read-only server-side in /ask, and re-running it here would just risk
+    # a different result (data changed underneath) than what's being
+    # exported and explained.
+    output_pdf_path = os.path.join(STATIC_REPORTS_DIR, f"dbquery_{uuid.uuid4().hex[:8]}.pdf")
+    try:
+        build_db_query_report(
+            question=request.question,
+            engine=request.engine,
+            query=request.query,
+            columns=request.columns,
+            rows=request.rows,
+            row_count_returned=request.row_count_returned,
+            truncated=request.truncated,
+            explanation=request.explanation,
+            output_pdf_path=output_pdf_path,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate PDF report: {e}",
+        )
+
+    return FileResponse(
+        path=output_pdf_path,
+        filename="database_query_report.pdf",
+        media_type="application/pdf",
     )

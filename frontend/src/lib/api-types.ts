@@ -322,6 +322,10 @@ export type NLQueryResult = {
   explanation: string | null;
 };
 
+export type DBQueryExportRequest = NLQueryResult & {
+  question: string;
+};
+
 // --- Hugging Face Models ---
 export type HFModelSummary = {
   model_id: string;

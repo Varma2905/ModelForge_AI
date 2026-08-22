@@ -1,6 +1,7 @@
+import json
 import os
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -37,6 +38,40 @@ def clean_markdown_for_pdf(text: str) -> str:
     
     return text
 
+
+def _report_styles() -> Dict[str, ParagraphStyle]:
+    """Shared paragraph styles used by both the model report and the
+    database query export, so the two PDFs read as one visual family."""
+    base = getSampleStyleSheet()
+    return {
+        "title": ParagraphStyle(
+            "DocTitle", parent=base["Heading1"], fontName="Helvetica-Bold",
+            fontSize=24, leading=28, textColor=colors.HexColor("#1e3a8a"), spaceAfter=15,
+        ),
+        "subtitle": ParagraphStyle(
+            "DocSubTitle", parent=base["Normal"], fontName="Helvetica-Oblique",
+            fontSize=10, leading=14, textColor=colors.HexColor("#475569"), spaceAfter=25,
+        ),
+        "h1": ParagraphStyle(
+            "SectionHeader", parent=base["Heading2"], fontName="Helvetica-Bold",
+            fontSize=15, leading=19, textColor=colors.HexColor("#1e3a8a"),
+            spaceBefore=15, spaceAfter=10, keepWithNext=True,
+        ),
+        "body": ParagraphStyle(
+            "ReportBody", parent=base["Normal"], fontName="Helvetica",
+            fontSize=9.5, leading=14, textColor=colors.HexColor("#1e293b"), spaceAfter=8,
+        ),
+        "cell": ParagraphStyle(
+            "TableCell", parent=base["Normal"], fontName="Helvetica",
+            fontSize=8.5, leading=11, textColor=colors.HexColor("#1e293b"),
+        ),
+        "cell_header": ParagraphStyle(
+            "TableCellHeader", parent=base["Normal"], fontName="Helvetica-Bold",
+            fontSize=8.5, leading=11, textColor=colors.white,
+        ),
+    }
+
+
 def build_pdf_report(
     model_id: str,
     model_info: Dict[str, Any],
@@ -56,68 +91,13 @@ def build_pdf_report(
         rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54
     )
     
-    styles = getSampleStyleSheet()
-    
-    # Custom styles to maintain professional typography
-    title_style = ParagraphStyle(
-        'DocTitle',
-        parent=styles['Heading1'],
-        fontName='Helvetica-Bold',
-        fontSize=24,
-        leading=28,
-        textColor=colors.HexColor('#1e3a8a'),
-        spaceAfter=15
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'DocSubTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Oblique',
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor('#475569'),
-        spaceAfter=25
-    )
-    
-    h1_style = ParagraphStyle(
-        'SectionHeader',
-        parent=styles['Heading2'],
-        fontName='Helvetica-Bold',
-        fontSize=15,
-        leading=19,
-        textColor=colors.HexColor('#1e3a8a'),
-        spaceBefore=15,
-        spaceAfter=10,
-        keepWithNext=True
-    )
-    
-    body_style = ParagraphStyle(
-        'ReportBody',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=9.5,
-        leading=14,
-        textColor=colors.HexColor('#1e293b'),
-        spaceAfter=8
-    )
-    
-    table_cell_style = ParagraphStyle(
-        'TableCell',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=8.5,
-        leading=11,
-        textColor=colors.HexColor('#1e293b')
-    )
-    
-    table_cell_header_style = ParagraphStyle(
-        'TableCellHeader',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=8.5,
-        leading=11,
-        textColor=colors.white
-    )
+    s = _report_styles()
+    title_style = s["title"]
+    subtitle_style = s["subtitle"]
+    h1_style = s["h1"]
+    body_style = s["body"]
+    table_cell_style = s["cell"]
+    table_cell_header_style = s["cell_header"]
 
     story = []
 
@@ -218,51 +198,85 @@ def build_pdf_report(
     story.append(t_metrics)
     story.append(Spacer(1, 15))
     
-    # 3. Statsmodels Coefficient Table
-    story.append(Paragraph("3. Statistical Parameter Analysis", h1_style))
-    stats = model_info.get("statistical_analysis", {})
-    coefs = stats.get("coefficients", {})
-    p_values = stats.get("p_values", {})
-    std_errors = stats.get("standard_errors", {})
-    t_stats = stats.get("t_statistics", {})
-    
-    stats_rows = [
-        [
-            Paragraph("Variable", table_cell_header_style), 
-            Paragraph("Coefficient", table_cell_header_style), 
-            Paragraph("Std. Error", table_cell_header_style), 
-            Paragraph("t-Statistic", table_cell_header_style), 
-            Paragraph("p-Value", table_cell_header_style),
-            Paragraph("Significant (p &lt; 0.05)", table_cell_header_style)
+    # 3. Statsmodels Coefficient Table — or, for a Hugging Face-sourced model
+    # (never fit locally via OLS), a provenance block instead.
+    if model_info.get("source") == "huggingface":
+        story.append(Paragraph("3. Model Provenance — Hugging Face", h1_style))
+        hf_model_id = model_info.get("hf_model_id") or model_info.get("model", "N/A")
+        version_warning = model_info.get("version_warning")
+
+        provenance_rows = [
+            [Paragraph("<b>Hugging Face Model ID</b>", table_cell_style), Paragraph(str(hf_model_id), table_cell_style)],
+            [Paragraph("<b>Execution Mode</b>", table_cell_style), Paragraph(str(model_info.get("execution_mode", "inference_only")), table_cell_style)],
+            [Paragraph("<b>Source</b>", table_cell_style), Paragraph("huggingface.co — pretrained, inference-only", table_cell_style)],
         ]
-    ]
-    
-    for var_name, coef in coefs.items():
-        p_val = p_values.get(var_name, 1.0)
-        std_err = std_errors.get(var_name, 0.0)
-        t_stat = t_stats.get(var_name, 0.0)
-        sig = "YES" if p_val < 0.05 else "NO"
-        
-        stats_rows.append([
-            Paragraph(f"<b>{var_name}</b>", table_cell_style),
-            Paragraph(f"{coef:,.4f}", table_cell_style),
-            Paragraph(f"{std_err:,.4f}", table_cell_style),
-            Paragraph(f"{t_stat:,.4f}", table_cell_style),
-            Paragraph(f"{p_val:.4f}", table_cell_style),
-            Paragraph(f"<font color='{'#10b981' if sig == 'YES' else '#ef4444'}'><b>{sig}</b></font>", table_cell_style)
-        ])
-        
-    t_stats_table = Table(stats_rows, colWidths=[120, 75, 75, 75, 75, 80])
-    t_stats_table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#475569')),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#475569')),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-    ]))
-    story.append(t_stats_table)
-    
+        if version_warning:
+            provenance_rows.append([
+                Paragraph("<b>Version Notice</b>", table_cell_style),
+                Paragraph(f"<font color='#b45309'>{version_warning}</font>", table_cell_style),
+            ])
+
+        t_provenance = Table(provenance_rows, colWidths=[150, 350])
+        t_provenance.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f8fafc')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#e2e8f0')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 6),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        story.append(t_provenance)
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(
+            "This model was executed via a pretrained Hugging Face pipeline rather than fit locally — "
+            "coefficient-level statistical analysis (p-values, t-statistics, standard errors) does not apply.",
+            body_style,
+        ))
+    else:
+        story.append(Paragraph("3. Statistical Parameter Analysis", h1_style))
+        stats = model_info.get("statistical_analysis", {})
+        coefs = stats.get("coefficients", {})
+        p_values = stats.get("p_values", {})
+        std_errors = stats.get("standard_errors", {})
+        t_stats = stats.get("t_statistics", {})
+
+        stats_rows = [
+            [
+                Paragraph("Variable", table_cell_header_style),
+                Paragraph("Coefficient", table_cell_header_style),
+                Paragraph("Std. Error", table_cell_header_style),
+                Paragraph("t-Statistic", table_cell_header_style),
+                Paragraph("p-Value", table_cell_header_style),
+                Paragraph("Significant (p &lt; 0.05)", table_cell_header_style)
+            ]
+        ]
+
+        for var_name, coef in coefs.items():
+            p_val = p_values.get(var_name, 1.0)
+            std_err = std_errors.get(var_name, 0.0)
+            t_stat = t_stats.get(var_name, 0.0)
+            sig = "YES" if p_val < 0.05 else "NO"
+
+            stats_rows.append([
+                Paragraph(f"<b>{var_name}</b>", table_cell_style),
+                Paragraph(f"{coef:,.4f}", table_cell_style),
+                Paragraph(f"{std_err:,.4f}", table_cell_style),
+                Paragraph(f"{t_stat:,.4f}", table_cell_style),
+                Paragraph(f"{p_val:.4f}", table_cell_style),
+                Paragraph(f"<font color='{'#10b981' if sig == 'YES' else '#ef4444'}'><b>{sig}</b></font>", table_cell_style)
+            ])
+
+        t_stats_table = Table(stats_rows, colWidths=[120, 75, 75, 75, 75, 80])
+        t_stats_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#475569')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#475569')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        story.append(t_stats_table)
+
     story.append(PageBreak()) # Move to next page for visualizations
     
     # --- PAGE 2: VISUALIZATION PLOTS ---
@@ -349,5 +363,101 @@ def build_pdf_report(
         
     # Build document
     doc.build(story)
-    
+
+    return output_pdf_path
+
+
+# Rows beyond this are omitted from the PDF table (not from the underlying
+# result) purely to keep the document a reasonable length; the row count
+# and truncation notice always reflect the real query result.
+DB_QUERY_PDF_ROW_LIMIT = 100
+
+
+def _format_cell_value(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, float):
+        return f"{value:,.4f}" if not value.is_integer() else f"{value:,.0f}"
+    return str(value)
+
+
+def build_db_query_report(
+    question: str,
+    engine: str,
+    query: Any,
+    columns: List[str],
+    rows: List[List[Any]],
+    row_count_returned: int,
+    truncated: bool,
+    explanation: Optional[str],
+    output_pdf_path: str,
+) -> str:
+    """Generates a standalone PDF export of a natural-language database
+    query: the question asked, the generated (read-only) query, the result
+    table, and the AI's grounded explanation of the result."""
+    os.makedirs(os.path.dirname(output_pdf_path), exist_ok=True)
+
+    doc = SimpleDocTemplate(
+        output_pdf_path,
+        pagesize=letter,
+        rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54,
+    )
+    s = _report_styles()
+    story: List[Any] = []
+
+    story.append(Paragraph("AI REGRESSION STUDIO", s["title"]))
+    story.append(Paragraph(f"Database Query Report — Engine: {engine}", s["subtitle"]))
+
+    story.append(Paragraph("1. Question", s["h1"]))
+    story.append(Paragraph(clean_markdown_for_pdf(question), s["body"]))
+
+    story.append(Paragraph("2. Generated Query (read-only)", s["h1"]))
+    query_text = query if isinstance(query, str) else json.dumps(query, indent=2, default=str)
+    query_text = query_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    query_style = ParagraphStyle("QueryBlock", parent=s["body"], fontName="Courier", fontSize=8.5, leading=12)
+    t_query = Table([[Paragraph(query_text.replace("\n", "<br/>"), query_style)]], colWidths=[504])
+    t_query.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f8fafc')),
+        ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    story.append(t_query)
+    story.append(Spacer(1, 15))
+
+    story.append(Paragraph("3. Result", s["h1"]))
+    shown_rows = rows[:DB_QUERY_PDF_ROW_LIMIT]
+    footnote = f"{row_count_returned} row(s) returned"
+    if truncated:
+        footnote += " (query result truncated by the server-side row limit)"
+    if len(rows) > DB_QUERY_PDF_ROW_LIMIT:
+        footnote += f" — showing first {DB_QUERY_PDF_ROW_LIMIT} in this PDF"
+    story.append(Paragraph(footnote, s["body"]))
+
+    if columns and shown_rows:
+        col_width = 504 / max(len(columns), 1)
+        table_data = [[Paragraph(c, s["cell_header"]) for c in columns]]
+        for row in shown_rows:
+            table_data.append([Paragraph(_format_cell_value(v), s["cell"]) for v in row])
+        t_results = Table(table_data, colWidths=[col_width] * len(columns), repeatRows=1)
+        t_results.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#1e3a8a')),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(t_results)
+    else:
+        story.append(Paragraph("No rows returned.", s["body"]))
+
+    if explanation:
+        story.append(Spacer(1, 15))
+        story.append(Paragraph("4. AI Explanation", s["h1"]))
+        story.append(Paragraph(clean_markdown_for_pdf(explanation), s["body"]))
+
+    doc.build(story)
     return output_pdf_path

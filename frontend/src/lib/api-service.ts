@@ -33,6 +33,7 @@ import type {
   HFModelSummary,
   HFRunModelRequest,
   HFRunModelResult,
+  DBQueryExportRequest,
   NLQueryRequest,
   NLQueryResult,
   ImportDatasetResult,
@@ -163,6 +164,26 @@ async function getBlob(path: string): Promise<Blob> {
     try {
       const body = await res.json();
       if (body?.error?.message) message = body.error.message;
+    } catch {
+      // ignore
+    }
+    if (res.status === 401) clearToken();
+    throw new ApiError(res.status, message);
+  }
+  return res.blob();
+}
+
+async function postBlob(path: string, body: unknown): Promise<Blob> {
+  const res = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `Request failed with status ${res.status}`;
+    try {
+      const errBody = await res.json();
+      if (errBody?.error?.message) message = errBody.error.message;
     } catch {
       // ignore
     }
@@ -393,6 +414,7 @@ export const api = {
 
   // Database AI Query
   askDatabaseQuestion: (payload: NLQueryRequest) => post<NLQueryResult>("/db-query/ask", payload),
+  exportDbQueryReport: (payload: DBQueryExportRequest) => postBlob("/db-query/export", payload),
 
   // Backend as a Service — management (Studio JWT)
   createBaasProject: (name: string) => post<BaasProjectCreateResult>("/baas/projects", { name }),

@@ -296,6 +296,32 @@ export type ImportDatasetResult = DatasetSummary & {
   row_limit_applied: number;
 };
 
+// --- Database AI Query ---
+export type NLQueryRequest = {
+  data_source_id: string;
+  database: string;
+  question: string;
+};
+
+export type NLQuerySqlQuery = string;
+
+export type NLQueryMongoQuery = {
+  collection: string;
+  filter: Record<string, unknown>;
+  sort: [string, 1 | -1][];
+  fields: string[] | null;
+};
+
+export type NLQueryResult = {
+  engine: DataSourceEngine;
+  query: NLQuerySqlQuery | NLQueryMongoQuery;
+  columns: string[];
+  rows: (string | number | null)[][];
+  row_count_returned: number;
+  truncated: boolean;
+  explanation: string | null;
+};
+
 // --- Hugging Face Models ---
 export type HFModelSummary = {
   model_id: string;

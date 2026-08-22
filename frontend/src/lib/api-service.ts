@@ -24,6 +24,8 @@ import type {
   HFModelSummary,
   HFRunModelRequest,
   HFRunModelResult,
+  NLQueryRequest,
+  NLQueryResult,
   ImportDatasetResult,
   ImportTableRequest,
   ModelListItem,
@@ -355,6 +357,9 @@ export const api = {
     }),
   runHfModel: (modelId: string, payload: HFRunModelRequest) =>
     post<HFRunModelResult>(`/hf/models/${encodeURIComponent(modelId)}/run`, payload),
+
+  // Database AI Query
+  askDatabaseQuestion: (payload: NLQueryRequest) => post<NLQueryResult>("/db-query/ask", payload),
 };
 
 export type { ChartData };

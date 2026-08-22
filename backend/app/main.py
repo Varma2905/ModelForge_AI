@@ -25,6 +25,7 @@ from app.api.report_routes import router as report_router
 from app.api.dashboard_routes import router as dashboard_router
 from app.api.data_sources import router as data_sources_router
 from app.api.hf_routes import router as hf_router
+from app.api.db_query_routes import router as db_query_router
 from app.utils.crypto import warn_if_unconfigured as warn_if_encryption_key_unconfigured
 from app.utils.response import err
 
@@ -66,6 +67,7 @@ app.include_router(report_router)
 app.include_router(dashboard_router)
 app.include_router(data_sources_router)
 app.include_router(hf_router)
+app.include_router(db_query_router)
 
 # Database connection events
 @app.on_event("startup")

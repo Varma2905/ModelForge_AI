@@ -43,17 +43,27 @@ import {
   CheckCircle2,
   XCircle,
   Trash2,
+  MessageCircleQuestion,
+  Save,
 } from "lucide-react";
 import {
   useCreateDataSource,
+  useDataSourceDatabases,
   useDataSourcesList,
   useDeleteDataSource,
+  useImportDataSourceTable,
   useTestConnection,
   useTestSavedDataSource,
 } from "@/hooks/use-data-sources";
+import { useAskDatabaseQuestion } from "@/hooks/use-db-query";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
-import type { ConnectionInput, DataSourceEngine, DataSourceSummary } from "@/lib/api-types";
+import type {
+  ConnectionInput,
+  DataSourceEngine,
+  DataSourceSummary,
+  NLQueryResult,
+} from "@/lib/api-types";
 
 export const Route = createFileRoute("/data-sources")({
   beforeLoad: requireAuth,
@@ -308,6 +318,194 @@ function AddConnectionDialog({ onCreated }: { onCreated: () => void }) {
   );
 }
 
+function isMongoQuery(query: NLQueryResult["query"]): query is Extract<NLQueryResult["query"], object> {
+  return typeof query === "object" && query !== null;
+}
+
+function AskQuestionDialog({ source }: { source: DataSourceSummary }) {
+  const [open, setOpen] = useState(false);
+  const [database, setDatabase] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
+  const [result, setResult] = useState<NLQueryResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [datasetName, setDatasetName] = useState("");
+
+  const databasesQuery = useDataSourceDatabases(open ? source.id : null);
+  const askMutation = useAskDatabaseQuestion();
+  const importMutation = useImportDataSourceTable();
+
+  const reset = () => {
+    setDatabase(null);
+    setQuestion("");
+    setResult(null);
+    setError(null);
+    setDatasetName("");
+  };
+
+  const handleAsk = async () => {
+    if (!database || !question.trim()) return;
+    setError(null);
+    setResult(null);
+    try {
+      const res = await askMutation.mutateAsync({ data_source_id: source.id, database, question: question.trim() });
+      setResult(res);
+      setDatasetName(question.trim().slice(0, 60));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to answer the question.");
+    }
+  };
+
+  const handleSaveAsDataset = async () => {
+    if (!result || !database) return;
+    try {
+      const payload = isMongoQuery(result.query)
+        ? {
+            database,
+            table: result.query.collection,
+            filter: result.query.filter,
+            sort: result.query.sort,
+            fields: result.query.fields ?? undefined,
+            dataset_name: datasetName || undefined,
+          }
+        : {
+            database,
+            custom_sql: result.query,
+            dataset_name: datasetName || undefined,
+          };
+      await importMutation.mutateAsync({ dataSourceId: source.id, payload });
+      toast.success("Saved as a new dataset");
+      setOpen(false);
+      reset();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to save as dataset");
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => (v ? setOpen(true) : (setOpen(false), reset()))}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline">
+          <MessageCircleQuestion className="h-3.5 w-3.5 mr-1" />
+          Ask
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Ask "{source.name}" a question</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="sm:col-span-1 space-y-1.5">
+              <Label className="text-xs">Database</Label>
+              <Select value={database ?? undefined} onValueChange={setDatabase} disabled={databasesQuery.isLoading}>
+                <SelectTrigger>
+                  <SelectValue placeholder={databasesQuery.isLoading ? "Loading…" : "Select a database"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {databasesQuery.data?.databases.map((db) => (
+                    <SelectItem key={db} value={db}>
+                      {db}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label className="text-xs">Question</Label>
+              <Input
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                placeholder="e.g. What are the top 5 customers by revenue?"
+              />
+            </div>
+          </div>
+
+          <Button onClick={handleAsk} disabled={!database || !question.trim() || askMutation.isPending}>
+            {askMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+            ) : (
+              <MessageCircleQuestion className="h-4 w-4 mr-1.5" />
+            )}
+            Ask
+          </Button>
+
+          {error && (
+            <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <XCircle className="h-4 w-4 flex-shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {result && (
+            <div className="space-y-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">Generated query (read-only)</Label>
+                <pre className="mt-1 rounded-md border bg-muted/50 p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap">
+                  {typeof result.query === "string" ? result.query : JSON.stringify(result.query, null, 2)}
+                </pre>
+              </div>
+
+              <div className="rounded-lg border overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-2 bg-muted text-xs text-muted-foreground">
+                  <Database className="h-3.5 w-3.5" />
+                  {result.row_count_returned} row(s) returned
+                  {result.truncated ? " (truncated)" : ""}
+                </div>
+                <div className="overflow-x-auto max-h-64">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50 sticky top-0">
+                      <tr>
+                        {result.columns.map((c) => (
+                          <th key={c} className="text-left p-2 font-medium whitespace-nowrap">
+                            {c}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.rows.map((r, i) => (
+                        <tr key={i} className="border-t">
+                          {r.map((v, j) => (
+                            <td key={j} className="p-2 whitespace-nowrap">
+                              {v === null ? <span className="text-muted-foreground">—</span> : String(v)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {result.explanation && (
+                <div className="rounded-md border p-3 text-sm text-muted-foreground whitespace-pre-wrap">
+                  {result.explanation}
+                </div>
+              )}
+
+              <div className="flex items-end gap-2">
+                <div className="flex-1 space-y-1.5">
+                  <Label className="text-xs">Dataset name</Label>
+                  <Input value={datasetName} onChange={(e) => setDatasetName(e.target.value)} />
+                </div>
+                <Button onClick={handleSaveAsDataset} disabled={importMutation.isPending} variant="outline">
+                  {importMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                  ) : (
+                    <Save className="h-4 w-4 mr-1.5" />
+                  )}
+                  Save as dataset
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function DataSourceCard({ source }: { source: DataSourceSummary }) {
   const testMutation = useTestSavedDataSource();
   const deleteMutation = useDeleteDataSource();
@@ -369,6 +567,7 @@ function DataSourceCard({ source }: { source: DataSourceSummary }) {
             {testMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Plug className="h-3.5 w-3.5 mr-1" />}
             Test
           </Button>
+          <AskQuestionDialog source={source} />
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button size="sm" variant="outline" className="text-destructive hover:text-destructive">

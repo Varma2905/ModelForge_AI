@@ -1,33 +1,104 @@
 import logging
+import warnings
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from typing import Dict, Any, List, Optional
+from scipy import stats as scipy_stats
+from sklearn.metrics import (
+    mean_squared_error,
+    mean_absolute_error,
+    mean_absolute_percentage_error,
+    mean_squared_log_error,
+    median_absolute_error,
+    max_error,
+    explained_variance_score,
+    r2_score,
+)
 import statsmodels.api as sm
 
 logger = logging.getLogger("regression_studio.ml")
 
-def calculate_evaluation_metrics(y_true: np.ndarray, y_pred: np.ndarray, n_samples: int, n_features: int) -> Dict[str, float]:
+
+def _safe_correlation(y_true_arr: np.ndarray, y_pred_arr: np.ndarray, n_samples: int) -> tuple[Optional[float], Optional[float]]:
+    """Pearson and Spearman correlation between actual and predicted values.
+    Both are undefined (division by zero, or scipy returns NaN with a
+    warning) for a constant array — every prediction identical, or a
+    perfectly-fit degenerate case — or fewer than 2 samples. Reported as
+    None rather than NaN in either case, per the same "never return NaN
+    without explaining why" rule the rest of this module already follows
+    for MAPE.
     """
-    Calculates standard error and regression metrics.
+    if n_samples < 2 or np.std(y_true_arr) == 0 or np.std(y_pred_arr) == 0:
+        return None, None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pearson_r = float(scipy_stats.pearsonr(y_true_arr, y_pred_arr).statistic)
+        spearman_r = float(scipy_stats.spearmanr(y_true_arr, y_pred_arr).statistic)
+    pearson_r = pearson_r if not np.isnan(pearson_r) else None
+    spearman_r = spearman_r if not np.isnan(spearman_r) else None
+    return pearson_r, spearman_r
+
+
+def calculate_evaluation_metrics(y_true: np.ndarray, y_pred: np.ndarray, n_samples: int, n_features: int) -> Dict[str, Any]:
     """
-    mse = float(mean_squared_error(y_true, y_pred))
-    mae = float(mean_absolute_error(y_true, y_pred))
+    Calculates standard error and regression metrics. Every metric that can
+    be legitimately undefined for a given dataset/prediction pair (division
+    by zero, a negative value under a log, a constant array, ...) reports
+    None instead of NaN/Infinity — see each metric's inline comment for its
+    specific validity condition.
+    """
+    y_true_arr = np.asarray(y_true, dtype=float)
+    y_pred_arr = np.asarray(y_pred, dtype=float)
+
+    mse = float(mean_squared_error(y_true_arr, y_pred_arr))
+    mae = float(mean_absolute_error(y_true_arr, y_pred_arr))
     rmse = float(np.sqrt(mse))
-    r2 = float(r2_score(y_true, y_pred))
-    
+    r2 = float(r2_score(y_true_arr, y_pred_arr))
+    median_ae = float(median_absolute_error(y_true_arr, y_pred_arr))
+    max_err = float(max_error(y_true_arr, y_pred_arr))
+    explained_variance = float(explained_variance_score(y_true_arr, y_pred_arr))
+
     # Adjusted R2 calculation
     if n_samples > n_features + 1:
         adjusted_r2 = float(1 - (1 - r2) * (n_samples - 1) / (n_samples - n_features - 1))
     else:
         adjusted_r2 = r2 # Fallback if not enough samples
-        
+
+    # MAPE is undefined (division by zero) whenever any true value is 0 —
+    # "MAPE where valid" means reporting None rather than inf/nan in that
+    # case, not silently coercing it into a misleading number.
+    mape = float(mean_absolute_percentage_error(y_true_arr, y_pred_arr)) if not np.any(y_true_arr == 0) else None
+
+    # MSLE/RMSLE take log1p() of both arrays internally, which is undefined
+    # for a negative value. A negative TRUE value can be a real data
+    # property (log-scale metrics simply don't apply to that target); a
+    # negative PREDICTED value is also a realistic occurrence for many
+    # regressors (e.g. plain Linear Regression can extrapolate below zero
+    # even on a strictly non-negative target) — either case reports None
+    # rather than crashing or silently clipping the offending values.
+    if np.all(y_true_arr >= 0) and np.all(y_pred_arr >= 0):
+        msle = float(mean_squared_log_error(y_true_arr, y_pred_arr))
+        rmsle = float(np.sqrt(msle))
+    else:
+        msle = None
+        rmsle = None
+
+    pearson_corr, spearman_corr = _safe_correlation(y_true_arr, y_pred_arr, n_samples)
+
     return {
         "MSE": mse,
         "MAE": mae,
         "RMSE": rmse,
         "R2": r2,
-        "Adjusted R2": adjusted_r2
+        "Adjusted R2": adjusted_r2,
+        "MAPE": mape,
+        "MSLE": msle,
+        "RMSLE": rmsle,
+        "Median Absolute Error": median_ae,
+        "Max Error": max_err,
+        "Explained Variance": explained_variance,
+        "Pearson Correlation": pearson_corr,
+        "Spearman Correlation": spearman_corr,
     }
 
 def calculate_statistical_properties(X: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:

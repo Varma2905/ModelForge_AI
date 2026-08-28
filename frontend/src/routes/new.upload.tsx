@@ -1,111 +1,102 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Upload, Plus, Trash2, Loader2 } from "lucide-react";
+import { Check, Cloud, Database, Monitor, Sparkles } from "lucide-react";
 import { WizardSteps } from "@/components/wizard-steps";
-import { DatabaseImportPanel } from "@/components/database-import-panel";
-import { useAnalysis, type Dataset } from "@/lib/analysis-store";
-import { useCreateDataset, usePreviewDataset, useUploadDataset } from "@/hooks/use-datasets";
+import { GradientIcon } from "@/components/gradient-icon";
+import { ScrollReveal } from "@/components/scroll-reveal";
+import { LocalFilePanel } from "@/components/dataset-sources/local-file-panel";
+import { ManualEditorPanel } from "@/components/dataset-sources/manual-editor-panel";
+import { KaggleImportPanel } from "@/components/dataset-sources/kaggle-import-panel";
+import { GoogleDrivePanel } from "@/components/dataset-sources/google-drive-panel";
+import { RecentUploadsPanel } from "@/components/dataset-sources/recent-uploads-panel";
+import { UploadInfoCards } from "@/components/dataset-sources/upload-info-cards";
+import { useAnalysis } from "@/lib/analysis-store";
+import { usePreviewDataset, useDatasetSourcesStatus } from "@/hooks/use-datasets";
+import { applyNewDataset } from "@/lib/apply-new-dataset";
 import { requireAuth } from "@/lib/require-auth";
-import { ApiError } from "@/lib/api-service";
-import type { ImportDatasetResult } from "@/lib/api-types";
-import { toast } from "sonner";
+import type { DatasetListItem, DatasetSourceType, DatasetSummary } from "@/lib/api-types";
 
 export const Route = createFileRoute("/new/upload")({
   beforeLoad: requireAuth,
   component: UploadPage,
 });
 
+type SourceId = "local" | "google_drive" | "kaggle" | "manual";
+
+const SOURCE_LABELS: Record<DatasetSourceType, string> = {
+  local: "Local Computer",
+  google_drive: "Google Drive",
+  kaggle: "Kaggle",
+  manual: "Created manually",
+};
+
 function UploadPage() {
   const { state, update } = useAnalysis();
   const navigate = useNavigate();
-  const [dragOver, setDragOver] = useState(false);
-  const [manual, setManual] = useState<Dataset>({
-    name: "manual_dataset",
-    columns: ["Area", "Bedrooms", "Age", "Price"],
-    rows: [
-      [1500, 3, 10, 5000000],
-      [2400, 4, 5, 8200000],
-    ],
-  });
+  const [activeSource, setActiveSource] = useState<SourceId | null>("local");
+  const [datasetSource, setDatasetSource] = useState<DatasetSourceType>("local");
 
-  const uploadMutation = useUploadDataset();
-  const createMutation = useCreateDataset();
-  const isSaving = uploadMutation.isPending || createMutation.isPending;
-
+  const sourcesStatus = useDatasetSourcesStatus();
   const preview = usePreviewDataset(state.datasetId);
 
-  const applyNewDataset = (
-    datasetId: string,
-    name: string,
-    missingValues: number,
-    dataTypes: Record<string, string>,
-  ) => {
-    // A new dataset invalidates everything downstream in the wizard.
-    update({
-      datasetId,
-      preprocessedDatasetId: null,
-      modelId: null,
-      dataset: { name, columns: [], rows: [] },
-      datasetStats: { missingValues, dataTypes },
-      features: [],
-      target: null,
-      preprocessingSummary: null,
-      trained: false,
-      results: {},
-      statisticalAnalysis: null,
-      chartData: null,
-      prediction: null,
+  const handleSelectRecent = (item: DatasetListItem) => {
+    setDatasetSource(item.source ?? "local");
+    update({ datasetId: item.dataset_id });
+  };
+
+  const handleNewDataset = (result: DatasetSummary) => {
+    setDatasetSource(result.source ?? activeSource ?? "local");
+    applyNewDataset(update, {
+      datasetId: result.dataset_id,
+      name: result.dataset_name,
+      totalRows: result.rows,
+      missingValues: result.missing_values,
+      dataTypes: result.data_types,
     });
   };
 
-  const handleFile = async (file: File) => {
-    const isSupported = /\.(csv|xlsx|xls)$/i.test(file.name);
-    if (!isSupported) {
-      toast.error("Only CSV and Excel (.xlsx, .xls) files are supported.");
-      return;
-    }
-    try {
-      const result = await uploadMutation.mutateAsync(file);
-      applyNewDataset(
-        result.dataset_id,
-        result.dataset_name,
-        result.missing_values,
-        result.data_types,
-      );
-      toast.success("Dataset uploaded");
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to upload dataset");
-    }
-  };
-
-  const saveManualDataset = async () => {
-    try {
-      const result = await createMutation.mutateAsync(manual);
-      applyNewDataset(
-        result.dataset_id,
-        result.dataset_name,
-        result.missing_values,
-        result.data_types,
-      );
-      toast.success("Dataset saved");
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to save dataset");
-    }
-  };
-
-  const handleDatabaseImport = (result: ImportDatasetResult) => {
-    applyNewDataset(result.dataset_id, result.dataset_name, result.missing_values, result.data_types);
-    toast.success(
-      result.truncated
-        ? `Dataset imported — row limit applied (${result.rows.toLocaleString()} rows)`
-        : "Dataset imported",
-    );
-  };
+  const cards: {
+    id: SourceId;
+    icon: typeof Monitor;
+    gradient: string;
+    title: string;
+    description: string;
+    formats?: string;
+  }[] = [
+    {
+      id: "local",
+      icon: Monitor,
+      gradient: "from-indigo-500 to-blue-600",
+      title: "Local Computer",
+      description: "Browse files from your PC",
+      formats: "CSV, XLSX, JSON, Parquet",
+    },
+    {
+      id: "google_drive",
+      icon: Cloud,
+      gradient: "from-cyan-500 to-blue-600",
+      title: "Google Drive",
+      description: "Select a dataset from Drive",
+    },
+    {
+      id: "kaggle",
+      icon: Database,
+      gradient: "from-emerald-500 to-teal-600",
+      title: "Kaggle",
+      description: "Fetch a public Kaggle dataset",
+    },
+    {
+      id: "manual",
+      icon: Sparkles,
+      gradient: "from-amber-500 to-orange-600",
+      title: "Create Manually",
+      description: "Build a dataset from scratch",
+    },
+  ];
 
   const ds = preview.data;
 
@@ -114,174 +105,65 @@ function UploadPage() {
       <WizardSteps />
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold">Dataset</h1>
-          <p className="text-muted-foreground text-sm">Upload a file or build one from scratch.</p>
+          <h1 className="text-2xl font-bold">Add Dataset</h1>
+          <p className="text-muted-foreground text-sm">
+            Choose where your dataset comes from or upload your files.
+          </p>
         </div>
 
-        <Tabs defaultValue="upload">
-          <TabsList>
-            <TabsTrigger value="upload">Upload</TabsTrigger>
-            <TabsTrigger value="manual">Create manually</TabsTrigger>
-            <TabsTrigger value="database">Connect Database</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="upload">
-            <Card>
-              <CardContent className="p-6">
-                <label
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragOver(true);
-                  }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setDragOver(false);
-                    const f = e.dataTransfer.files?.[0];
-                    if (f) handleFile(f);
-                  }}
-                  className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-10 cursor-pointer transition ${
-                    dragOver ? "border-primary bg-primary/5" : "border-muted-foreground/30"
-                  } ${isSaving ? "pointer-events-none opacity-60" : ""}`}
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {cards.map((c, i) => {
+            const selected = activeSource === c.id;
+            return (
+              <ScrollReveal key={c.id} delay={i * 60}>
+                <Card
+                  variant="glass"
+                  className={`card-interactive cursor-pointer ${selected ? "border-primary ring-2 ring-primary/30" : ""}`}
+                  onClick={() => setActiveSource(c.id)}
                 >
-                  {isSaving ? (
-                    <Loader2 className="h-10 w-10 text-muted-foreground mb-3 animate-spin" />
-                  ) : (
-                    <Upload className="h-10 w-10 text-muted-foreground mb-3" />
-                  )}
-                  <div className="font-medium">
-                    {isSaving ? "Uploading dataset…" : "Drop CSV / XLSX here"}
-                  </div>
-                  <div className="text-xs text-muted-foreground">or click to browse</div>
-                  <input
-                    type="file"
-                    accept=".csv,.xlsx,.xls"
-                    className="hidden"
-                    disabled={isSaving}
-                    onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-                  />
-                </label>
-              </CardContent>
-            </Card>
-          </TabsContent>
+                  <CardContent className="p-5 space-y-3">
+                    <div className="flex items-start justify-between">
+                      <GradientIcon icon={c.icon} className={`bg-gradient-to-br ${c.gradient}`} />
+                      {selected && <Check className="h-4 w-4 text-primary" />}
+                    </div>
+                    <div>
+                      <h3 className="font-semibold">{c.title}</h3>
+                      <p className="text-sm text-muted-foreground">{c.description}</p>
+                      {c.formats && <p className="text-xs text-muted-foreground mt-1">{c.formats}</p>}
+                    </div>
+                  </CardContent>
+                </Card>
+              </ScrollReveal>
+            );
+          })}
+        </div>
 
-          <TabsContent value="manual">
-            <Card>
-              <CardHeader>
-                <CardTitle>Spreadsheet Editor</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex gap-2 flex-wrap">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      setManual((m) => ({
-                        ...m,
-                        columns: [...m.columns, `col${m.columns.length + 1}`],
-                        rows: m.rows.map((r) => [...r, 0]),
-                      }))
-                    }
-                  >
-                    <Plus className="h-3 w-3 mr-1" /> Column
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      setManual((m) => ({
-                        ...m,
-                        rows: [...m.rows, new Array(m.columns.length).fill(0)],
-                      }))
-                    }
-                  >
-                    <Plus className="h-3 w-3 mr-1" /> Row
-                  </Button>
-                  <Button size="sm" onClick={saveManualDataset} disabled={isSaving}>
-                    {isSaving ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
-                    Save dataset
-                  </Button>
-                </div>
-                <div className="overflow-x-auto rounded-lg border">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted">
-                      <tr>
-                        {manual.columns.map((c, i) => (
-                          <th key={i} className="p-1">
-                            <div className="flex items-center gap-1">
-                              <Input
-                                value={c}
-                                onChange={(e) =>
-                                  setManual((m) => {
-                                    const cols = [...m.columns];
-                                    cols[i] = e.target.value;
-                                    return { ...m, columns: cols };
-                                  })
-                                }
-                                className="h-8"
-                              />
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() =>
-                                  setManual((m) => ({
-                                    ...m,
-                                    columns: m.columns.filter((_, x) => x !== i),
-                                    rows: m.rows.map((r) => r.filter((_, x) => x !== i)),
-                                  }))
-                                }
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {manual.rows.map((r, ri) => (
-                        <tr key={ri} className="border-t">
-                          {r.map((v, ci) => (
-                            <td key={ci} className="p-1">
-                              <Input
-                                value={String(v)}
-                                onChange={(e) =>
-                                  setManual((m) => {
-                                    const rows = m.rows.map((row) => [...row]);
-                                    const n = Number(e.target.value);
-                                    rows[ri][ci] = Number.isFinite(n) ? n : e.target.value;
-                                    return { ...m, rows };
-                                  })
-                                }
-                                className="h-8"
-                              />
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
+        <div className="grid gap-4 lg:grid-cols-5">
+          <div className="lg:col-span-3">
+            {activeSource === "local" && <LocalFilePanel onUploaded={handleNewDataset} />}
+            {activeSource === "manual" && <ManualEditorPanel onCreated={handleNewDataset} />}
+            {activeSource === "kaggle" && <KaggleImportPanel onImported={handleNewDataset} />}
+            {activeSource === "google_drive" && (
+              <GoogleDrivePanel
+                configured={sourcesStatus.data?.google_drive_configured ?? false}
+                onImported={handleNewDataset}
+              />
+            )}
+          </div>
+          <div className="lg:col-span-2">
+            <RecentUploadsPanel onSelect={handleSelectRecent} />
+          </div>
+        </div>
 
-          <TabsContent value="database">
-            <Card>
-              <CardHeader>
-                <CardTitle>Connect a Database</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <DatabaseImportPanel onImported={handleDatabaseImport} />
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+        <UploadInfoCards />
 
         {state.datasetId && (
           <Card>
-            <CardHeader>
-              <CardTitle>Preview — {ds?.name ?? state.dataset?.name}</CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardTitle>
+                {ds ? "Dataset Ready" : "Loading dataset…"} — {ds?.name ?? state.dataset?.name}
+              </CardTitle>
+              {ds && <SourceBadge source={ds.source ?? datasetSource} />}
             </CardHeader>
             <CardContent className="space-y-4">
               {preview.isLoading ? (
@@ -336,6 +218,12 @@ function UploadPage() {
                       </tbody>
                     </table>
                   </div>
+                  {ds.total_rows > ds.rows.length && (
+                    <p className="text-xs text-muted-foreground">
+                      Previewing {Math.min(20, ds.rows.length)} of {ds.total_rows.toLocaleString()} rows.
+                      The full dataset is used for preprocessing and training.
+                    </p>
+                  )}
                 </>
               ) : null}
               <div className="flex justify-end gap-2">
@@ -346,7 +234,14 @@ function UploadPage() {
                   disabled={!ds}
                   onClick={() => {
                     if (ds)
-                      update({ dataset: { name: ds.name, columns: ds.columns, rows: ds.rows } });
+                      update({
+                        dataset: {
+                          name: ds.name,
+                          columns: ds.columns,
+                          rows: ds.rows,
+                          totalRows: ds.total_rows,
+                        },
+                      });
                     navigate({ to: "/new/variables" });
                   }}
                 >
@@ -359,6 +254,10 @@ function UploadPage() {
       </div>
     </div>
   );
+}
+
+function SourceBadge({ source }: { source: DatasetSourceType }) {
+  return <Badge variant="secondary">{SOURCE_LABELS[source]}</Badge>;
 }
 
 function Stat({ label, value }: { label: string; value: number | string }) {

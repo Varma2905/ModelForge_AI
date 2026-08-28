@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from typing import List, Optional
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_user
 from app.database.mongodb import db_client
+from app.datasets import store as dataset_store
 from app.hf import provider as hf_provider
 from app.hf.client import HFClientError
 from app.hf.inference import HFExecutionError
@@ -49,7 +51,7 @@ def _raise_http_from_execution_error(e: HFExecutionError) -> None:
 
 
 async def _get_owned_dataset(dataset_id: str, user_id: str) -> dict:
-    dataset = await db_client.find_one("datasets", {"_id": dataset_id})
+    dataset = dataset_store.load_meta(dataset_id)
     if not dataset or dataset.get("user_id") != user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -119,7 +121,7 @@ async def check_compatibility(
 @router.post("/models/{model_id:path}/run")
 async def run_model(model_id: str, request: RunModelRequest, current_user: dict = Depends(get_current_user)):
     dataset = await _get_owned_dataset(request.dataset_id, current_user["_id"])
-    df = pd.DataFrame(dataset["rows"], columns=dataset["columns"])
+    df = await asyncio.to_thread(dataset_store.load_dataframe, request.dataset_id)
 
     all_selected = request.features + [request.target]
     missing_cols = [c for c in all_selected if c not in df.columns]
@@ -203,7 +205,7 @@ async def run_model(model_id: str, request: RunModelRequest, current_user: dict 
     new_model_id = str(uuid.uuid4())[:8]
     try:
         save_model_package(
-            model_id=new_model_id, model=estimator, features=request.features, target=request.target, scaler=None
+            model_id=new_model_id, model=estimator, features=request.features, target=request.target, preprocessor=None
         )
     except Exception as e:
         raise HTTPException(

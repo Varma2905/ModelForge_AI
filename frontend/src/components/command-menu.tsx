@@ -4,9 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   Sparkles,
-  Plug,
   Boxes,
-  Rocket,
   Database,
   GitCompare,
   FileText,
@@ -28,9 +26,7 @@ import type { ModelListItem } from "@/lib/api-types";
 const NAV_ITEMS = [
   { title: "Dashboard", url: "/" as const, icon: LayoutDashboard },
   { title: "New Analysis", url: "/new/upload" as const, icon: Sparkles },
-  { title: "Data Sources", url: "/data-sources" as const, icon: Plug },
   { title: "Hugging Face Models", url: "/hf-models" as const, icon: Boxes },
-  { title: "Projects", url: "/baas" as const, icon: Rocket },
   { title: "Dataset History", url: "/history" as const, icon: Database },
   { title: "Compare Models", url: "/compare" as const, icon: GitCompare },
   { title: "Reports", url: "/reports" as const, icon: FileText },

@@ -1,6 +1,6 @@
-# AI Regression Studio — Frontend
+# ModelForge AI Studio — Frontend
 
-This is the frontend for the AI Regression Studio. It is built with:
+This is the frontend for the ModelForge AI Studio. It is built with:
 
 - **TanStack Start** (React + File-based routing)
 - **Tailwind CSS v4**

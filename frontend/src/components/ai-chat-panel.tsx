@@ -107,6 +107,8 @@ export function AiChatPanel({
   suggestions,
   headerActions,
   initialInput,
+  disabled = false,
+  compact = false,
 }: {
   messages: ChatMessage[];
   onSend: (text: string) => void;
@@ -119,9 +121,14 @@ export function AiChatPanel({
   headerActions?: ReactNode;
   /** Pre-fills the input box, unsent — the user still reviews/edits before sending. */
   initialInput?: string;
+  /** Disables the input + send button entirely (e.g. no report selected yet). */
+  disabled?: boolean;
+  /** Smaller, narrower composer (input/button/suggestions/helper text) — opt-in so
+   * every other caller of this shared panel keeps its current sizing untouched. */
+  compact?: boolean;
 }) {
   const [input, setInput] = useState(initialInput ?? "");
-  const busy = sending || streaming;
+  const busy = sending || streaming || disabled;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -189,56 +196,84 @@ export function AiChatPanel({
         )}
       </div>
 
-      <div className="border-t p-4 space-y-3 flex-shrink-0">
-        {suggestions && suggestions.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {suggestions.map((s) => (
-              <button
-                key={s}
-                onClick={() => setInput(s)}
-                disabled={busy}
-                type="button"
-                className="text-xs rounded-full border px-3 py-1 hover:bg-accent transition-colors disabled:opacity-40"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="flex gap-2 items-end">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            placeholder={placeholder}
-            rows={1}
-            className="chat-scroll flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring max-h-40 min-h-9"
-            style={{ height: "auto" }}
-            onInput={(e) => {
-              const el = e.currentTarget;
-              el.style.height = "auto";
-              el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-            }}
-          />
-          {streaming ? (
-            <Button onClick={onStop} variant="destructive" type="button">
-              <Square className="h-4 w-4" /> Stop
-            </Button>
-          ) : (
-            <Button onClick={submit} disabled={busy || !input.trim()} type="button">
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </Button>
+      <div className={compact ? "border-t px-4 py-3 space-y-2 flex-shrink-0" : "border-t p-4 space-y-3 flex-shrink-0"}>
+        <div className={compact ? "md:w-3/4 md:mx-auto space-y-2" : undefined}>
+          {suggestions && suggestions.length > 0 && (
+            <div className={compact ? "flex flex-wrap gap-1.5" : "flex flex-wrap gap-2"}>
+              {suggestions.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setInput(s)}
+                  disabled={busy}
+                  type="button"
+                  className={
+                    compact
+                      ? "text-[11px] rounded-full border px-2.5 py-0.5 hover:bg-accent transition-colors disabled:opacity-40"
+                      : "text-xs rounded-full border px-3 py-1 hover:bg-accent transition-colors disabled:opacity-40"
+                  }
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
           )}
+
+          <div className="flex gap-2 items-end">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder={placeholder}
+              rows={1}
+              disabled={disabled}
+              className={
+                compact
+                  ? "chat-scroll flex-1 resize-none rounded-lg border border-input bg-background px-3.5 py-3 text-[13px] shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring max-h-40 min-h-12 disabled:opacity-50 disabled:cursor-not-allowed"
+                  : "chat-scroll flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring max-h-40 min-h-9 disabled:opacity-50 disabled:cursor-not-allowed"
+              }
+              style={{ height: "auto" }}
+              onInput={(e) => {
+                const el = e.currentTarget;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+              }}
+            />
+            {streaming ? (
+              <Button
+                onClick={onStop}
+                variant="destructive"
+                type="button"
+                className={compact ? "h-12 flex-shrink-0" : undefined}
+              >
+                <Square className="h-4 w-4" /> Stop
+              </Button>
+            ) : (
+              <Button
+                onClick={submit}
+                disabled={busy || !input.trim()}
+                type="button"
+                size={compact ? "icon" : undefined}
+                className={compact ? "h-12 w-12 flex-shrink-0" : undefined}
+              >
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </Button>
+            )}
+          </div>
+          <p
+            className={
+              compact
+                ? "text-[10px] text-muted-foreground flex items-center gap-1"
+                : "text-[11px] text-muted-foreground flex items-center gap-1"
+            }
+          >
+            <Sparkles className={compact ? "h-2.5 w-2.5" : "h-3 w-3"} /> Enter to send, Shift+Enter for a new line.
+          </p>
         </div>
-        <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-          <Sparkles className="h-3 w-3" /> Enter to send, Shift+Enter for a new line.
-        </p>
       </div>
     </div>
   );

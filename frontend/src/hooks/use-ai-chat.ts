@@ -17,6 +17,12 @@ export type Conversation = {
   title: string;
   messages: ChatMessage[];
   createdAt: number;
+  // The generated report (model_id) this conversation is analyzing, if any —
+  // kept per-conversation so switching between conversations restores each
+  // one's own report context instead of leaking the currently-selected
+  // report across unrelated chats. Absent on conversations persisted before
+  // this field existed, which the `?? null` in loadPersisted normalizes.
+  reportId: string | null;
 };
 
 // Client-side mirror of the backend's own history cap (see MAX_HISTORY_MESSAGES
@@ -35,7 +41,7 @@ function titleFromText(text: string) {
 }
 
 function makeConversation(): Conversation {
-  return { id: makeId(), title: "New conversation", messages: [], createdAt: Date.now() };
+  return { id: makeId(), title: "New conversation", messages: [], createdAt: Date.now(), reportId: null };
 }
 
 function loadPersisted(storageKey: string): Conversation[] | null {
@@ -44,7 +50,10 @@ function loadPersisted(storageKey: string): Conversation[] | null {
     const raw = localStorage.getItem(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Conversation[];
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      // Normalize conversations persisted before `reportId` existed.
+      return parsed.map((c) => ({ ...c, reportId: c.reportId ?? null }));
+    }
   } catch {
     // ignore corrupt storage
   }
@@ -114,6 +123,18 @@ export function useAiChat(options: { persistKey?: string; contextModelId?: strin
     [updateConversation],
   );
 
+  // Associates a conversation with a generated report (model_id) — e.g. when
+  // the user picks a report from the Generated Reports panel, or clears the
+  // selection. Only affects future messages sent in this conversation;
+  // existing message history is untouched, so switching reports mid-chat
+  // doesn't rewrite what was already said.
+  const setConversationReport = useCallback(
+    (id: string, reportId: string | null) => {
+      updateConversation(id, (c) => ({ ...c, reportId }));
+    },
+    [updateConversation],
+  );
+
   const stop = useCallback(() => {
     const controller = abortRef.current;
     if (!controller) return;
@@ -145,13 +166,20 @@ export function useAiChat(options: { persistKey?: string; contextModelId?: strin
       };
 
       let historyForRequest: AIChatTurn[] = [];
+      let conversationReportId: string | null = null;
       setConversations((prev) =>
         prev.map((c) => {
           if (c.id !== convId) return c;
           const isFirst = c.messages.length === 0;
+          // A message that errored before any delta arrived (rate limit,
+          // network failure, ...) is stored with empty content — the backend
+          // rejects any turn with empty content, so it must never be
+          // forwarded, or every retry after a failed turn would 400 too.
           historyForRequest = [...c.messages, userMsg]
+            .filter((m) => m.content.trim().length > 0)
             .slice(-MAX_HISTORY_TURNS)
             .map((m) => ({ role: m.role, content: m.content }));
+          conversationReportId = c.reportId;
           return {
             ...c,
             title: isFirst ? titleFromText(trimmed) : c.title,
@@ -167,7 +195,7 @@ export function useAiChat(options: { persistKey?: string; contextModelId?: strin
       let firstToken = true;
 
       streamChat(
-        { messages: historyForRequest, model_id: contextModelId ?? undefined },
+        { messages: historyForRequest, model_id: contextModelId ?? conversationReportId ?? undefined },
         {
           onDelta: (delta) => {
             if (firstToken) {
@@ -217,6 +245,7 @@ export function useAiChat(options: { persistKey?: string; contextModelId?: strin
     newConversation,
     deleteConversation,
     clearConversation,
+    setConversationReport,
     send,
     stop,
     sending,

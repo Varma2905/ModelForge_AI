@@ -19,7 +19,6 @@ import { Route as DataSourcesRouteImport } from './routes/data-sources'
 import { Route as CompareRouteImport } from './routes/compare'
 import { Route as AssistantRouteImport } from './routes/assistant'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as BaasIndexRouteImport } from './routes/baas.index'
 import { Route as NewVisualizeRouteImport } from './routes/new.visualize'
 import { Route as NewVariablesRouteImport } from './routes/new.variables'
 import { Route as NewUploadRouteImport } from './routes/new.upload'
@@ -32,7 +31,25 @@ import { Route as NewModelRouteImport } from './routes/new.model'
 import { Route as NewMetricsRouteImport } from './routes/new.metrics'
 import { Route as NewExplainRouteImport } from './routes/new.explain'
 import { Route as ModelsModelIdRouteImport } from './routes/models.$modelId'
-import { Route as BaasProjectIdRouteImport } from './routes/baas.$projectId'
+import { Route as ClusterVisualizeRouteImport } from './routes/cluster.visualize'
+import { Route as ClusterVariablesRouteImport } from './routes/cluster.variables'
+import { Route as ClusterUploadRouteImport } from './routes/cluster.upload'
+import { Route as ClusterTrainRouteImport } from './routes/cluster.train'
+import { Route as ClusterReportRouteImport } from './routes/cluster.report'
+import { Route as ClusterModelRouteImport } from './routes/cluster.model'
+import { Route as ClusterExplainRouteImport } from './routes/cluster.explain'
+import { Route as ClusterAnalysisRouteImport } from './routes/cluster.analysis'
+import { Route as ClassifyVisualizeRouteImport } from './routes/classify.visualize'
+import { Route as ClassifyVariablesRouteImport } from './routes/classify.variables'
+import { Route as ClassifyUploadRouteImport } from './routes/classify.upload'
+import { Route as ClassifyTrainRouteImport } from './routes/classify.train'
+import { Route as ClassifySplitRouteImport } from './routes/classify.split'
+import { Route as ClassifyReportRouteImport } from './routes/classify.report'
+import { Route as ClassifyPreprocessingRouteImport } from './routes/classify.preprocessing'
+import { Route as ClassifyPredictRouteImport } from './routes/classify.predict'
+import { Route as ClassifyModelRouteImport } from './routes/classify.model'
+import { Route as ClassifyMetricsRouteImport } from './routes/classify.metrics'
+import { Route as ClassifyExplainRouteImport } from './routes/classify.explain'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -82,11 +99,6 @@ const AssistantRoute = AssistantRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BaasIndexRoute = BaasIndexRouteImport.update({
-  id: '/baas/',
-  path: '/baas/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NewVisualizeRoute = NewVisualizeRouteImport.update({
@@ -149,9 +161,99 @@ const ModelsModelIdRoute = ModelsModelIdRouteImport.update({
   path: '/models/$modelId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const BaasProjectIdRoute = BaasProjectIdRouteImport.update({
-  id: '/baas/$projectId',
-  path: '/baas/$projectId',
+const ClusterVisualizeRoute = ClusterVisualizeRouteImport.update({
+  id: '/cluster/visualize',
+  path: '/cluster/visualize',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClusterVariablesRoute = ClusterVariablesRouteImport.update({
+  id: '/cluster/variables',
+  path: '/cluster/variables',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClusterUploadRoute = ClusterUploadRouteImport.update({
+  id: '/cluster/upload',
+  path: '/cluster/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClusterTrainRoute = ClusterTrainRouteImport.update({
+  id: '/cluster/train',
+  path: '/cluster/train',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClusterReportRoute = ClusterReportRouteImport.update({
+  id: '/cluster/report',
+  path: '/cluster/report',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClusterModelRoute = ClusterModelRouteImport.update({
+  id: '/cluster/model',
+  path: '/cluster/model',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClusterExplainRoute = ClusterExplainRouteImport.update({
+  id: '/cluster/explain',
+  path: '/cluster/explain',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClusterAnalysisRoute = ClusterAnalysisRouteImport.update({
+  id: '/cluster/analysis',
+  path: '/cluster/analysis',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyVisualizeRoute = ClassifyVisualizeRouteImport.update({
+  id: '/classify/visualize',
+  path: '/classify/visualize',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyVariablesRoute = ClassifyVariablesRouteImport.update({
+  id: '/classify/variables',
+  path: '/classify/variables',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyUploadRoute = ClassifyUploadRouteImport.update({
+  id: '/classify/upload',
+  path: '/classify/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyTrainRoute = ClassifyTrainRouteImport.update({
+  id: '/classify/train',
+  path: '/classify/train',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifySplitRoute = ClassifySplitRouteImport.update({
+  id: '/classify/split',
+  path: '/classify/split',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyReportRoute = ClassifyReportRouteImport.update({
+  id: '/classify/report',
+  path: '/classify/report',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyPreprocessingRoute = ClassifyPreprocessingRouteImport.update({
+  id: '/classify/preprocessing',
+  path: '/classify/preprocessing',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyPredictRoute = ClassifyPredictRouteImport.update({
+  id: '/classify/predict',
+  path: '/classify/predict',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyModelRoute = ClassifyModelRouteImport.update({
+  id: '/classify/model',
+  path: '/classify/model',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyMetricsRoute = ClassifyMetricsRouteImport.update({
+  id: '/classify/metrics',
+  path: '/classify/metrics',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClassifyExplainRoute = ClassifyExplainRouteImport.update({
+  id: '/classify/explain',
+  path: '/classify/explain',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -166,7 +268,25 @@ export interface FileRoutesByFullPath {
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
-  '/baas/$projectId': typeof BaasProjectIdRoute
+  '/classify/explain': typeof ClassifyExplainRoute
+  '/classify/metrics': typeof ClassifyMetricsRoute
+  '/classify/model': typeof ClassifyModelRoute
+  '/classify/predict': typeof ClassifyPredictRoute
+  '/classify/preprocessing': typeof ClassifyPreprocessingRoute
+  '/classify/report': typeof ClassifyReportRoute
+  '/classify/split': typeof ClassifySplitRoute
+  '/classify/train': typeof ClassifyTrainRoute
+  '/classify/upload': typeof ClassifyUploadRoute
+  '/classify/variables': typeof ClassifyVariablesRoute
+  '/classify/visualize': typeof ClassifyVisualizeRoute
+  '/cluster/analysis': typeof ClusterAnalysisRoute
+  '/cluster/explain': typeof ClusterExplainRoute
+  '/cluster/model': typeof ClusterModelRoute
+  '/cluster/report': typeof ClusterReportRoute
+  '/cluster/train': typeof ClusterTrainRoute
+  '/cluster/upload': typeof ClusterUploadRoute
+  '/cluster/variables': typeof ClusterVariablesRoute
+  '/cluster/visualize': typeof ClusterVisualizeRoute
   '/models/$modelId': typeof ModelsModelIdRoute
   '/new/explain': typeof NewExplainRoute
   '/new/metrics': typeof NewMetricsRoute
@@ -179,7 +299,6 @@ export interface FileRoutesByFullPath {
   '/new/upload': typeof NewUploadRoute
   '/new/variables': typeof NewVariablesRoute
   '/new/visualize': typeof NewVisualizeRoute
-  '/baas/': typeof BaasIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -192,7 +311,25 @@ export interface FileRoutesByTo {
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
-  '/baas/$projectId': typeof BaasProjectIdRoute
+  '/classify/explain': typeof ClassifyExplainRoute
+  '/classify/metrics': typeof ClassifyMetricsRoute
+  '/classify/model': typeof ClassifyModelRoute
+  '/classify/predict': typeof ClassifyPredictRoute
+  '/classify/preprocessing': typeof ClassifyPreprocessingRoute
+  '/classify/report': typeof ClassifyReportRoute
+  '/classify/split': typeof ClassifySplitRoute
+  '/classify/train': typeof ClassifyTrainRoute
+  '/classify/upload': typeof ClassifyUploadRoute
+  '/classify/variables': typeof ClassifyVariablesRoute
+  '/classify/visualize': typeof ClassifyVisualizeRoute
+  '/cluster/analysis': typeof ClusterAnalysisRoute
+  '/cluster/explain': typeof ClusterExplainRoute
+  '/cluster/model': typeof ClusterModelRoute
+  '/cluster/report': typeof ClusterReportRoute
+  '/cluster/train': typeof ClusterTrainRoute
+  '/cluster/upload': typeof ClusterUploadRoute
+  '/cluster/variables': typeof ClusterVariablesRoute
+  '/cluster/visualize': typeof ClusterVisualizeRoute
   '/models/$modelId': typeof ModelsModelIdRoute
   '/new/explain': typeof NewExplainRoute
   '/new/metrics': typeof NewMetricsRoute
@@ -205,7 +342,6 @@ export interface FileRoutesByTo {
   '/new/upload': typeof NewUploadRoute
   '/new/variables': typeof NewVariablesRoute
   '/new/visualize': typeof NewVisualizeRoute
-  '/baas': typeof BaasIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -219,7 +355,25 @@ export interface FileRoutesById {
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
-  '/baas/$projectId': typeof BaasProjectIdRoute
+  '/classify/explain': typeof ClassifyExplainRoute
+  '/classify/metrics': typeof ClassifyMetricsRoute
+  '/classify/model': typeof ClassifyModelRoute
+  '/classify/predict': typeof ClassifyPredictRoute
+  '/classify/preprocessing': typeof ClassifyPreprocessingRoute
+  '/classify/report': typeof ClassifyReportRoute
+  '/classify/split': typeof ClassifySplitRoute
+  '/classify/train': typeof ClassifyTrainRoute
+  '/classify/upload': typeof ClassifyUploadRoute
+  '/classify/variables': typeof ClassifyVariablesRoute
+  '/classify/visualize': typeof ClassifyVisualizeRoute
+  '/cluster/analysis': typeof ClusterAnalysisRoute
+  '/cluster/explain': typeof ClusterExplainRoute
+  '/cluster/model': typeof ClusterModelRoute
+  '/cluster/report': typeof ClusterReportRoute
+  '/cluster/train': typeof ClusterTrainRoute
+  '/cluster/upload': typeof ClusterUploadRoute
+  '/cluster/variables': typeof ClusterVariablesRoute
+  '/cluster/visualize': typeof ClusterVisualizeRoute
   '/models/$modelId': typeof ModelsModelIdRoute
   '/new/explain': typeof NewExplainRoute
   '/new/metrics': typeof NewMetricsRoute
@@ -232,7 +386,6 @@ export interface FileRoutesById {
   '/new/upload': typeof NewUploadRoute
   '/new/variables': typeof NewVariablesRoute
   '/new/visualize': typeof NewVisualizeRoute
-  '/baas/': typeof BaasIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -247,7 +400,25 @@ export interface FileRouteTypes {
     | '/reports'
     | '/settings'
     | '/signup'
-    | '/baas/$projectId'
+    | '/classify/explain'
+    | '/classify/metrics'
+    | '/classify/model'
+    | '/classify/predict'
+    | '/classify/preprocessing'
+    | '/classify/report'
+    | '/classify/split'
+    | '/classify/train'
+    | '/classify/upload'
+    | '/classify/variables'
+    | '/classify/visualize'
+    | '/cluster/analysis'
+    | '/cluster/explain'
+    | '/cluster/model'
+    | '/cluster/report'
+    | '/cluster/train'
+    | '/cluster/upload'
+    | '/cluster/variables'
+    | '/cluster/visualize'
     | '/models/$modelId'
     | '/new/explain'
     | '/new/metrics'
@@ -260,7 +431,6 @@ export interface FileRouteTypes {
     | '/new/upload'
     | '/new/variables'
     | '/new/visualize'
-    | '/baas/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -273,7 +443,25 @@ export interface FileRouteTypes {
     | '/reports'
     | '/settings'
     | '/signup'
-    | '/baas/$projectId'
+    | '/classify/explain'
+    | '/classify/metrics'
+    | '/classify/model'
+    | '/classify/predict'
+    | '/classify/preprocessing'
+    | '/classify/report'
+    | '/classify/split'
+    | '/classify/train'
+    | '/classify/upload'
+    | '/classify/variables'
+    | '/classify/visualize'
+    | '/cluster/analysis'
+    | '/cluster/explain'
+    | '/cluster/model'
+    | '/cluster/report'
+    | '/cluster/train'
+    | '/cluster/upload'
+    | '/cluster/variables'
+    | '/cluster/visualize'
     | '/models/$modelId'
     | '/new/explain'
     | '/new/metrics'
@@ -286,7 +474,6 @@ export interface FileRouteTypes {
     | '/new/upload'
     | '/new/variables'
     | '/new/visualize'
-    | '/baas'
   id:
     | '__root__'
     | '/'
@@ -299,7 +486,25 @@ export interface FileRouteTypes {
     | '/reports'
     | '/settings'
     | '/signup'
-    | '/baas/$projectId'
+    | '/classify/explain'
+    | '/classify/metrics'
+    | '/classify/model'
+    | '/classify/predict'
+    | '/classify/preprocessing'
+    | '/classify/report'
+    | '/classify/split'
+    | '/classify/train'
+    | '/classify/upload'
+    | '/classify/variables'
+    | '/classify/visualize'
+    | '/cluster/analysis'
+    | '/cluster/explain'
+    | '/cluster/model'
+    | '/cluster/report'
+    | '/cluster/train'
+    | '/cluster/upload'
+    | '/cluster/variables'
+    | '/cluster/visualize'
     | '/models/$modelId'
     | '/new/explain'
     | '/new/metrics'
@@ -312,7 +517,6 @@ export interface FileRouteTypes {
     | '/new/upload'
     | '/new/variables'
     | '/new/visualize'
-    | '/baas/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -326,7 +530,25 @@ export interface RootRouteChildren {
   ReportsRoute: typeof ReportsRoute
   SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
-  BaasProjectIdRoute: typeof BaasProjectIdRoute
+  ClassifyExplainRoute: typeof ClassifyExplainRoute
+  ClassifyMetricsRoute: typeof ClassifyMetricsRoute
+  ClassifyModelRoute: typeof ClassifyModelRoute
+  ClassifyPredictRoute: typeof ClassifyPredictRoute
+  ClassifyPreprocessingRoute: typeof ClassifyPreprocessingRoute
+  ClassifyReportRoute: typeof ClassifyReportRoute
+  ClassifySplitRoute: typeof ClassifySplitRoute
+  ClassifyTrainRoute: typeof ClassifyTrainRoute
+  ClassifyUploadRoute: typeof ClassifyUploadRoute
+  ClassifyVariablesRoute: typeof ClassifyVariablesRoute
+  ClassifyVisualizeRoute: typeof ClassifyVisualizeRoute
+  ClusterAnalysisRoute: typeof ClusterAnalysisRoute
+  ClusterExplainRoute: typeof ClusterExplainRoute
+  ClusterModelRoute: typeof ClusterModelRoute
+  ClusterReportRoute: typeof ClusterReportRoute
+  ClusterTrainRoute: typeof ClusterTrainRoute
+  ClusterUploadRoute: typeof ClusterUploadRoute
+  ClusterVariablesRoute: typeof ClusterVariablesRoute
+  ClusterVisualizeRoute: typeof ClusterVisualizeRoute
   ModelsModelIdRoute: typeof ModelsModelIdRoute
   NewExplainRoute: typeof NewExplainRoute
   NewMetricsRoute: typeof NewMetricsRoute
@@ -339,7 +561,6 @@ export interface RootRouteChildren {
   NewUploadRoute: typeof NewUploadRoute
   NewVariablesRoute: typeof NewVariablesRoute
   NewVisualizeRoute: typeof NewVisualizeRoute
-  BaasIndexRoute: typeof BaasIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -412,13 +633,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/baas/': {
-      id: '/baas/'
-      path: '/baas'
-      fullPath: '/baas/'
-      preLoaderRoute: typeof BaasIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/new/visualize': {
@@ -505,11 +719,137 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ModelsModelIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/baas/$projectId': {
-      id: '/baas/$projectId'
-      path: '/baas/$projectId'
-      fullPath: '/baas/$projectId'
-      preLoaderRoute: typeof BaasProjectIdRouteImport
+    '/cluster/visualize': {
+      id: '/cluster/visualize'
+      path: '/cluster/visualize'
+      fullPath: '/cluster/visualize'
+      preLoaderRoute: typeof ClusterVisualizeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cluster/variables': {
+      id: '/cluster/variables'
+      path: '/cluster/variables'
+      fullPath: '/cluster/variables'
+      preLoaderRoute: typeof ClusterVariablesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cluster/upload': {
+      id: '/cluster/upload'
+      path: '/cluster/upload'
+      fullPath: '/cluster/upload'
+      preLoaderRoute: typeof ClusterUploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cluster/train': {
+      id: '/cluster/train'
+      path: '/cluster/train'
+      fullPath: '/cluster/train'
+      preLoaderRoute: typeof ClusterTrainRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cluster/report': {
+      id: '/cluster/report'
+      path: '/cluster/report'
+      fullPath: '/cluster/report'
+      preLoaderRoute: typeof ClusterReportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cluster/model': {
+      id: '/cluster/model'
+      path: '/cluster/model'
+      fullPath: '/cluster/model'
+      preLoaderRoute: typeof ClusterModelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cluster/explain': {
+      id: '/cluster/explain'
+      path: '/cluster/explain'
+      fullPath: '/cluster/explain'
+      preLoaderRoute: typeof ClusterExplainRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cluster/analysis': {
+      id: '/cluster/analysis'
+      path: '/cluster/analysis'
+      fullPath: '/cluster/analysis'
+      preLoaderRoute: typeof ClusterAnalysisRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/visualize': {
+      id: '/classify/visualize'
+      path: '/classify/visualize'
+      fullPath: '/classify/visualize'
+      preLoaderRoute: typeof ClassifyVisualizeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/variables': {
+      id: '/classify/variables'
+      path: '/classify/variables'
+      fullPath: '/classify/variables'
+      preLoaderRoute: typeof ClassifyVariablesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/upload': {
+      id: '/classify/upload'
+      path: '/classify/upload'
+      fullPath: '/classify/upload'
+      preLoaderRoute: typeof ClassifyUploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/train': {
+      id: '/classify/train'
+      path: '/classify/train'
+      fullPath: '/classify/train'
+      preLoaderRoute: typeof ClassifyTrainRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/split': {
+      id: '/classify/split'
+      path: '/classify/split'
+      fullPath: '/classify/split'
+      preLoaderRoute: typeof ClassifySplitRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/report': {
+      id: '/classify/report'
+      path: '/classify/report'
+      fullPath: '/classify/report'
+      preLoaderRoute: typeof ClassifyReportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/preprocessing': {
+      id: '/classify/preprocessing'
+      path: '/classify/preprocessing'
+      fullPath: '/classify/preprocessing'
+      preLoaderRoute: typeof ClassifyPreprocessingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/predict': {
+      id: '/classify/predict'
+      path: '/classify/predict'
+      fullPath: '/classify/predict'
+      preLoaderRoute: typeof ClassifyPredictRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/model': {
+      id: '/classify/model'
+      path: '/classify/model'
+      fullPath: '/classify/model'
+      preLoaderRoute: typeof ClassifyModelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/metrics': {
+      id: '/classify/metrics'
+      path: '/classify/metrics'
+      fullPath: '/classify/metrics'
+      preLoaderRoute: typeof ClassifyMetricsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/classify/explain': {
+      id: '/classify/explain'
+      path: '/classify/explain'
+      fullPath: '/classify/explain'
+      preLoaderRoute: typeof ClassifyExplainRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -526,7 +866,25 @@ const rootRouteChildren: RootRouteChildren = {
   ReportsRoute: ReportsRoute,
   SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,
-  BaasProjectIdRoute: BaasProjectIdRoute,
+  ClassifyExplainRoute: ClassifyExplainRoute,
+  ClassifyMetricsRoute: ClassifyMetricsRoute,
+  ClassifyModelRoute: ClassifyModelRoute,
+  ClassifyPredictRoute: ClassifyPredictRoute,
+  ClassifyPreprocessingRoute: ClassifyPreprocessingRoute,
+  ClassifyReportRoute: ClassifyReportRoute,
+  ClassifySplitRoute: ClassifySplitRoute,
+  ClassifyTrainRoute: ClassifyTrainRoute,
+  ClassifyUploadRoute: ClassifyUploadRoute,
+  ClassifyVariablesRoute: ClassifyVariablesRoute,
+  ClassifyVisualizeRoute: ClassifyVisualizeRoute,
+  ClusterAnalysisRoute: ClusterAnalysisRoute,
+  ClusterExplainRoute: ClusterExplainRoute,
+  ClusterModelRoute: ClusterModelRoute,
+  ClusterReportRoute: ClusterReportRoute,
+  ClusterTrainRoute: ClusterTrainRoute,
+  ClusterUploadRoute: ClusterUploadRoute,
+  ClusterVariablesRoute: ClusterVariablesRoute,
+  ClusterVisualizeRoute: ClusterVisualizeRoute,
   ModelsModelIdRoute: ModelsModelIdRoute,
   NewExplainRoute: NewExplainRoute,
   NewMetricsRoute: NewMetricsRoute,
@@ -539,7 +897,6 @@ const rootRouteChildren: RootRouteChildren = {
   NewUploadRoute: NewUploadRoute,
   NewVariablesRoute: NewVariablesRoute,
   NewVisualizeRoute: NewVisualizeRoute,
-  BaasIndexRoute: BaasIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

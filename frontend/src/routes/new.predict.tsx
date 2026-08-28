@@ -4,10 +4,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Loader2, Sparkles } from "lucide-react";
 import { WizardSteps } from "@/components/wizard-steps";
 import { useAnalysis } from "@/lib/analysis-store";
 import { usePredict } from "@/hooks/use-prediction";
+import { useModelMetrics } from "@/hooks/use-training";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
 import { toast } from "sonner";
@@ -22,6 +30,7 @@ function PredictPage() {
   const navigate = useNavigate();
   const [values, setValues] = useState<Record<string, string>>({});
   const predict = usePredict();
+  const metricsQuery = useModelMetrics(state.modelId);
 
   if (!state.modelId) {
     return (
@@ -39,7 +48,25 @@ function PredictPage() {
     );
   }
 
-  const missingFeatures = state.features.filter((f) => !values[f]?.trim());
+  if (metricsQuery.isLoading || !metricsQuery.data) {
+    return (
+      <div>
+        <WizardSteps />
+        <Card>
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            <Loader2 className="h-5 w-5 mx-auto mb-2 animate-spin" />
+            Loading model…
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const model = metricsQuery.data;
+  const categoricalFeatures = new Set(model.categorical_features);
+  const features = model.features;
+
+  const missingFeatures = features.filter((f) => !values[f]?.trim());
 
   const runPredict = async () => {
     if (missingFeatures.length > 0) {
@@ -47,8 +74,10 @@ function PredictPage() {
       return;
     }
     try {
-      const payload: Record<string, number> = {};
-      for (const f of state.features) payload[f] = Number(values[f]);
+      const payload: Record<string, number | string> = {};
+      for (const f of features) {
+        payload[f] = categoricalFeatures.has(f) ? values[f] : Number(values[f]);
+      }
       const result = await predict.mutateAsync({ model_id: state.modelId!, values: payload });
       update({ prediction: result.prediction });
     } catch (err) {
@@ -65,19 +94,44 @@ function PredictPage() {
             <CardTitle>Enter Feature Values</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {state.features.length === 0 && (
+            {features.length === 0 && (
               <p className="text-sm text-muted-foreground">No features selected.</p>
             )}
-            {state.features.map((f) => (
-              <div key={f}>
-                <Label>{f}</Label>
-                <Input
-                  type="number"
-                  value={values[f] ?? ""}
-                  onChange={(e) => setValues((v) => ({ ...v, [f]: e.target.value }))}
-                />
-              </div>
-            ))}
+            {features.map((f) => {
+              const options = model.categorical_options[f];
+              if (categoricalFeatures.has(f) && options) {
+                return (
+                  <div key={f}>
+                    <Label>{f}</Label>
+                    <Select
+                      value={values[f] ?? ""}
+                      onValueChange={(v) => setValues((prev) => ({ ...prev, [f]: v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a value" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {options.map((opt) => (
+                          <SelectItem key={opt} value={opt}>
+                            {opt}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                );
+              }
+              return (
+                <div key={f}>
+                  <Label>{f}</Label>
+                  <Input
+                    type="number"
+                    value={values[f] ?? ""}
+                    onChange={(e) => setValues((v) => ({ ...v, [f]: e.target.value }))}
+                  />
+                </div>
+              );
+            })}
             <Button onClick={runPredict} className="w-full" disabled={predict.isPending}>
               {predict.isPending ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -105,7 +159,7 @@ function PredictPage() {
             {state.prediction !== null && (
               <div className="mt-4 rounded-lg bg-white/10 p-3 text-xs space-y-1">
                 <div className="font-medium text-white/90 mb-1">Input summary</div>
-                {state.features.map((f) => (
+                {features.map((f) => (
                   <div key={f} className="flex justify-between text-white/80">
                     <span>{f}</span>
                     <span>{values[f]}</span>
@@ -117,8 +171,8 @@ function PredictPage() {
         </Card>
       </div>
       <div className="flex justify-end mt-6">
-        <Button onClick={() => navigate({ to: "/new/visualize" })}>
-          Continue to Visualizations
+        <Button onClick={() => navigate({ to: "/new/metrics" })}>
+          Continue to Metrics
         </Button>
       </div>
     </div>

@@ -70,7 +70,7 @@ function ReportPage() {
           <Sec title="Dataset Information">
             <p>Name: {state.dataset?.name ?? "—"}</p>
             <p>
-              Rows: {state.dataset?.rows.length ?? 0} · Columns:{" "}
+              Rows: {state.dataset?.totalRows ?? state.dataset?.rows.length ?? 0} · Columns:{" "}
               {state.dataset?.columns.length ?? 0}
             </p>
           </Sec>
@@ -98,6 +98,13 @@ function ReportPage() {
               {100 - state.split.train - (state.split.useVal ? state.split.val : 0)}%
               {state.split.useVal ? ` · Val ${state.split.val}%` : ""}
             </p>
+            {state.trainedRowCounts && (
+              <p className="text-muted-foreground">
+                {state.trainedRowCounts.total} total rows · {state.trainedRowCounts.train} training
+                rows · {state.trainedRowCounts.test} testing rows
+                {state.trainedRowCounts.val > 0 ? ` · ${state.trainedRowCounts.val} validation rows` : ""}
+              </p>
+            )}
           </Sec>
           <Sec title="Algorithm">
             <p>{state.model ?? "—"}</p>

@@ -107,6 +107,21 @@ function ExplainPage() {
 
   const importance = metricsQuery.data?.chart_data.feature_importance ?? [];
   const sections = explainQuery.data ? parseReportSections(explainQuery.data.full_report) : [];
+  // statistical_analysis.p_values is keyed by the RAW (unmapped) pipeline
+  // output names ("cat__city_Chennai") — chart_data.feature_importance is
+  // the same coefficient set already run through the backend's one-hot
+  // name-mapping helper, in the same order, minus "const". Both come from
+  // the identical statsmodels OLS fit (params/pvalues indexed over the same
+  // design matrix columns in the same order), so a positional zip pairs
+  // each mapped display label with its correct p-value without needing to
+  // re-derive the mapping client-side.
+  const pValueList = Object.entries(metricsQuery.data?.statistical_analysis?.p_values ?? {}).filter(
+    ([k]) => k !== "const",
+  );
+  const coefficientRows = importance.map((entry, i) => ({
+    ...entry,
+    p_value: pValueList[i]?.[1] ?? null,
+  }));
 
   return (
     <div>
@@ -160,6 +175,54 @@ function ExplainPage() {
                 </ResponsiveContainer>
               ) : (
                 <p className="text-sm text-muted-foreground">No importance data available.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Coefficients</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Categorical features expand into one row per category, relative to a dropped
+                baseline category.
+              </p>
+            </CardHeader>
+            <CardContent>
+              {metricsQuery.isLoading ? (
+                <Skeleton className="h-32 w-full" />
+              ) : coefficientRows.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-xs text-muted-foreground">
+                        <th className="py-2 pr-4 font-medium">Feature</th>
+                        <th className="py-2 pr-4 font-medium">Coefficient</th>
+                        <th className="py-2 font-medium">P-value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {coefficientRows.map((row) => (
+                        <tr key={row.feature} className="border-b last:border-0">
+                          <td className="py-2 pr-4 font-medium">{row.feature}</td>
+                          <td className="py-2 pr-4 tabular-nums">
+                            {typeof row.value === "number" ? row.value.toFixed(4) : "—"}
+                          </td>
+                          <td className="py-2 tabular-nums">
+                            {typeof row.p_value === "number" ? (
+                              <span className={row.p_value <= 0.05 ? "text-emerald-600 dark:text-emerald-500" : "text-muted-foreground"}>
+                                {row.p_value.toFixed(4)}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No coefficient data available.</p>
               )}
             </CardContent>
           </Card>

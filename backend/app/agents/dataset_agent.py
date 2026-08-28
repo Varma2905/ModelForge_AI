@@ -1,67 +1,22 @@
 import logging
-import os
 from typing import Dict, Any, List, Optional
 import pandas as pd
 import numpy as np
 
+from app.services.huggingface_service import get_llm
+
 logger = logging.getLogger("regression_studio.agents")
 
-# Try importing LangChain/LLM modules
+# Try importing LangChain's provider-agnostic message schema. This is the
+# only LangChain dependency left in the agents — the actual LLM call goes
+# through HuggingFaceChatModel (see app/services/huggingface_service.py),
+# which implements just enough of the ainvoke()/astream() shape that these
+# plain SystemMessage/HumanMessage objects keep working unchanged.
 try:
-    from langchain_openai import ChatOpenAI
-    from langchain_google_genai import ChatGoogleGenerativeAI
     from langchain_core.messages import SystemMessage, HumanMessage
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
-
-def get_llm(provider: Optional[str] = None, model: Optional[str] = None):
-    """Helper to initialize and return a LangChain LLM if keys are available."""
-    if not LANGCHAIN_AVAILABLE:
-        return None
-
-    gemini_key = os.getenv("GOOGLE_API_KEY")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    provider = provider.lower() if provider else None
-
-    # max_retries=1 and an explicit timeout keep failures (bad model name,
-    # exhausted quota, network issues) surfacing in a few seconds instead of
-    # the SDK's default silent multi-retry backoff, which could otherwise
-    # leave a chat request looking "stuck" for a long time before the
-    # friendly error message in ai_routes.py ever gets a chance to show.
-    if provider in {"gemini", "google"} and gemini_key:
-        try:
-            return ChatGoogleGenerativeAI(
-                model=model or "gemini-2.5-flash", google_api_key=gemini_key, max_retries=1, timeout=30
-            )
-        except Exception:
-            pass
-    if provider == "openai" and openai_key:
-        try:
-            return ChatOpenAI(
-                model=model or "gpt-4o-mini", openai_api_key=openai_key, max_retries=1, request_timeout=30
-            )
-        except Exception:
-            pass
-
-    # Default provider preference: Gemini first (per .env.example, it's the
-    # recommended provider with a free tier), then OpenAI as a fallback.
-    if gemini_key:
-        try:
-            return ChatGoogleGenerativeAI(
-                model=model or "gemini-2.5-flash", google_api_key=gemini_key, max_retries=1, timeout=30
-            )
-        except Exception:
-            pass
-    if openai_key:
-        try:
-            return ChatOpenAI(
-                model=model or "gpt-4o-mini", openai_api_key=openai_key, max_retries=1, request_timeout=30
-            )
-        except Exception:
-            pass
-
-    return None
 
 class DatasetAnalysisAgent:
     def __init__(self):

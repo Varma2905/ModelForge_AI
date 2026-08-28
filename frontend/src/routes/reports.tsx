@@ -4,11 +4,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { FileText, Download, Eye, Loader2 } from "lucide-react";
-import { useModelsList } from "@/hooks/use-training";
+import { FileText, Download, Eye, Loader2, Trash2 } from "lucide-react";
+import { useModelsList, useDeleteModel } from "@/hooks/use-training";
 import { useDownloadReport } from "@/hooks/use-reports";
 import { GradientIcon } from "@/components/gradient-icon";
 import { EmptyState } from "@/components/empty-state";
+import { ScrollReveal } from "@/components/scroll-reveal";
 import { requireAuth } from "@/lib/require-auth";
 import { ApiError } from "@/lib/api-service";
 import { downloadBlob } from "@/lib/download-blob";
@@ -23,6 +24,7 @@ export const Route = createFileRoute("/reports")({
 function ReportCard({ model }: { model: ModelListItem }) {
   const downloadMutation = useDownloadReport();
   const previewMutation = useDownloadReport();
+  const deleteMutation = useDeleteModel();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
 
@@ -53,6 +55,18 @@ function ReportCard({ model }: { model: ModelListItem }) {
       setPreviewOpen(true);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Failed to generate PDF report");
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Delete the report for "${model.dataset_name} — ${model.model}"? This can't be undone.`)) {
+      return;
+    }
+    try {
+      await deleteMutation.mutateAsync(model.model_id);
+      toast.success("Report deleted");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to delete report");
     }
   };
 
@@ -98,6 +112,20 @@ function ReportCard({ model }: { model: ModelListItem }) {
               <Download className="h-3 w-3 mr-1" />
             )}
             Download
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            aria-label={`Delete report for ${model.dataset_name} — ${model.model}`}
+            onClick={handleDelete}
+            disabled={deleteMutation.isPending}
+          >
+            {deleteMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}
           </Button>
         </div>
       </CardContent>
@@ -156,8 +184,10 @@ function ReportsPage() {
         </Card>
       ) : (
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {data.map((m) => (
-            <ReportCard key={m.model_id} model={m} />
+          {data.map((m, i) => (
+            <ScrollReveal key={m.model_id} delay={(i % 6) * 50}>
+              <ReportCard model={m} />
+            </ScrollReveal>
           ))}
         </div>
       )}

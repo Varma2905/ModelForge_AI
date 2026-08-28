@@ -74,7 +74,7 @@ function LoginPage() {
             <BrainCircuit className="h-6 w-6" />
           </div>
           <div>
-            <div className="font-semibold leading-tight">AI Regression</div>
+            <div className="font-semibold leading-tight">ModelForge AI</div>
             <div className="text-xs text-white/80 leading-tight">Studio</div>
           </div>
         </div>

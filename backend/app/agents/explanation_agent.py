@@ -1,7 +1,8 @@
 import logging
 import os
-from typing import Dict, Any, List
-from app.agents.dataset_agent import get_llm
+from typing import Dict, Any, List, Optional
+from app.services.huggingface_service import get_llm
+from app.ml.feature_types import map_expanded_coefficients
 
 logger = logging.getLogger("regression_studio.agents")
 
@@ -14,7 +15,10 @@ class StatisticalInterpretationAgent:
     def __init__(self):
         self.llm = get_llm()
 
-    async def explain(self, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str) -> str:
+    async def explain(
+        self, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str,
+        numeric_features: Optional[List[str]] = None, categorical_features: Optional[List[str]] = None,
+    ) -> str:
         """
         Interprets OLS statistics and model performance.
         Returns a detailed Markdown analysis of R2, RMSE, coefficients, and feature significance.
@@ -40,9 +44,14 @@ class StatisticalInterpretationAgent:
                 logger.warning(f"StatisticalInterpretationAgent LLM failed: {e}. Falling back to statistical parser.")
 
         # Analytical fallback
-        return self._generate_analytical_fallback(metrics, stats, features, target)
+        return self._generate_analytical_fallback(
+            metrics, stats, features, target, numeric_features, categorical_features,
+        )
 
-    def _generate_analytical_fallback(self, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str) -> str:
+    def _generate_analytical_fallback(
+        self, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str,
+        numeric_features: Optional[List[str]] = None, categorical_features: Optional[List[str]] = None,
+    ) -> str:
         r2 = metrics.get("R2", 0.0)
         adj_r2 = metrics.get("Adjusted R2", 0.0)
         rmse = metrics.get("RMSE", 0.0)
@@ -53,27 +62,74 @@ class StatisticalInterpretationAgent:
         
         # 1. Interpret R2
         if r2 >= 0.90:
-            r2_desc = f"**Excellent fit** ({r2:.1%}). The model explains **{r2:.1f}%** of the variance in `{target}`, indicating very high predictive capability."
+            r2_desc = f"**Excellent fit** ({r2:.1%}). The model explains **{r2:.1%}** of the variance in `{target}`, indicating very high predictive capability."
         elif r2 >= 0.70:
-            r2_desc = f"**Strong fit** ({r2:.1%}). The model explains **{r2:.1f}%** of the variance in `{target}`. This is typically reliable for decision-making and forecasting."
+            r2_desc = f"**Strong fit** ({r2:.1%}). The model explains **{r2:.1%}** of the variance in `{target}`. This is typically reliable for decision-making and forecasting."
         elif r2 >= 0.50:
-            r2_desc = f"**Moderate fit** ({r2:.1%}). The model explains **{r2:.1f}%** of the variance in `{target}`. There is noticeable unexplained variance, indicating potential missing variables or nonlinear relationships."
+            r2_desc = f"**Moderate fit** ({r2:.1%}). The model explains **{r2:.1%}** of the variance in `{target}`. There is noticeable unexplained variance, indicating potential missing variables or nonlinear relationships."
         else:
-            r2_desc = f"**Weak fit** ({r2:.1%}). The model explains only **{r2:.1f}%** of the variance in `{target}`. It should not be used in production without incorporating additional features or testing non-linear algorithms."
+            r2_desc = f"**Weak fit** ({r2:.1%}). The model explains only **{r2:.1%}** of the variance in `{target}`. It should not be used in production without incorporating additional features or testing non-linear algorithms."
 
-        # 2. Interpret features significance
+        # 2. Interpret features significance. Iterates over the ACTUAL
+        # coefficient keys (which are now expanded one-hot/scaled pipeline
+        # output names like "cat__city_Chennai", not the original selected
+        # feature names) via the same shared mapping helper used for the PDF
+        # report and charts — a categorical feature produces one coefficient
+        # PER CATEGORY relative to its dropped reference category, not one
+        # coefficient for the whole column, so iterating `features` directly
+        # would silently miss every categorical entry (they'd never match a
+        # dict key exactly).
+        numeric_feats = numeric_features if numeric_features is not None else features
+        categorical_feats = categorical_features or []
+        encoded_categorical_names = [
+            k[len("cat__"):] for k in coefs if k.startswith("cat__")
+        ]
+        # coefs and p_values come from the same fitted statsmodels result, so
+        # they share the exact same key set in the exact same (insertion)
+        # order — mapping both through the identical call and zipping by
+        # position is simpler and more robust than trying to reconstruct one
+        # dict's raw key from the other's already-stripped display label.
+        mapped_coefs = map_expanded_coefficients(
+            {k: v for k, v in coefs.items() if k != "const"},
+            numeric_feats, categorical_feats, encoded_categorical_names,
+        )
+        mapped_pvalues = map_expanded_coefficients(
+            {k: v for k, v in p_values.items() if k != "const"},
+            numeric_feats, categorical_feats, encoded_categorical_names,
+        )
+        pvalue_by_feature = {e["feature"]: e["value"] for e in mapped_pvalues}
+
         significant_feats = []
         insignificant_feats = []
-        
-        for feat in features:
-            p_val = p_values.get(feat, 0.5)
-            coef_val = coefs.get(feat, 0.0)
-            
+
+        for entry in mapped_coefs:
+            feat = entry["feature"]
+            source = entry["source_feature"]
+            coef_val = entry["value"]
+            p_val = pvalue_by_feature.get(feat)
+
+            # statsmodels can leave a coefficient/p-value unresolved (NaN,
+            # sanitized to None before storage) on a near-singular design
+            # matrix — most commonly Polynomial Regression once feature
+            # expansion produces many collinear columns. Report that
+            # explicitly rather than crashing on a None comparison/format.
+            if p_val is None or coef_val is None:
+                insignificant_feats.append(
+                    f"- **`{feat}`**: statistical significance could not be computed (likely multicollinearity "
+                    f"among the expanded features). Treat this coefficient with caution."
+                )
+                continue
+
             # Identify significance
             if p_val <= 0.05:
                 direction = "positive" if coef_val >= 0 else "negative"
                 significant_feats.append(
-                    f"- **`{feat}`** is **statistically significant** (p-value: `{p_val:.4f}` < 0.05). It has a **{direction}** impact. Holding all other features constant, a 1-unit increase in `{feat}` is associated with an average change of **{coef_val:,.2f}** in `{target}`."
+                    f"- **`{feat}`** is **statistically significant** (p-value: `{p_val:.4f}` < 0.05). It has a **{direction}** impact "
+                    + (
+                        f"on `{target}` relative to the baseline category of `{source}`, of **{coef_val:,.2f}**."
+                        if source in categorical_feats
+                        else f"— holding all other features constant, a 1-unit increase in `{feat}` is associated with an average change of **{coef_val:,.2f}** in `{target}`."
+                    )
                 )
             else:
                 insignificant_feats.append(
@@ -82,10 +138,16 @@ class StatisticalInterpretationAgent:
 
         significant_text = "\n".join(significant_feats) if significant_feats else "No single feature was statistically significant at the 5% confidence level."
         insignificant_text = "\n".join(insignificant_feats) if insignificant_feats else "All selected features are statistically significant."
-        
+
         # 3. Intercept explanation
-        intercept = coefs.get("const", coefs.get("Intercept", 0.0))
-        intercept_text = f"The baseline intercept value is **{intercept:,.2f}**, representing the predicted `{target}` if all features are zero (though this baseline configuration may not always represent a realistic physical scenario)."
+        intercept = coefs.get("const", coefs.get("Intercept"))
+        if intercept is None:
+            intercept_text = (
+                f"The baseline intercept could not be reliably estimated (likely multicollinearity among the "
+                f"expanded features), so no baseline `{target}` value is reported here."
+            )
+        else:
+            intercept_text = f"The baseline intercept value is **{intercept:,.2f}**, representing the predicted `{target}` if all features are zero (though this baseline configuration may not always represent a realistic physical scenario)."
 
         markdown_output = f"""### Statistical Interpretation: **Model Results**
 

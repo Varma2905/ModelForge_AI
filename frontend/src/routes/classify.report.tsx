@@ -1,0 +1,159 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { WizardSteps, classificationSteps } from "@/components/wizard-steps";
+import { useClassificationAnalysis } from "@/lib/classification-analysis-store";
+import { useDownloadReport } from "@/hooks/use-reports";
+import { requireAuth } from "@/lib/require-auth";
+import { ApiError } from "@/lib/api-service";
+import { downloadBlob } from "@/lib/download-blob";
+import { Download, FileText, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+
+export const Route = createFileRoute("/classify/report")({
+  beforeLoad: requireAuth,
+  component: ReportPage,
+});
+
+// Structured (array/object) metric values get their own dedicated
+// visualizations on the Visualize/Explain steps, not a flat metric badge.
+const NON_SCALAR_METRIC_KEYS = new Set(["ConfusionMatrix", "Classes", "ClassificationReport"]);
+
+function ReportPage() {
+  const { state } = useClassificationAnalysis();
+  const downloadReport = useDownloadReport();
+
+  const download = async () => {
+    if (!state.modelId) return;
+    try {
+      const blob = await downloadReport.mutateAsync(state.modelId);
+      downloadBlob(blob, `classification-report-${state.modelId}.pdf`);
+      toast.success("PDF report downloaded");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to generate PDF report");
+    }
+  };
+
+  if (!state.modelId) {
+    return (
+      <div>
+        <WizardSteps steps={classificationSteps} />
+        <Card>
+          <CardContent className="p-8 text-center">
+            <p>Train a model first to generate a report.</p>
+            <Button asChild className="mt-4">
+              <Link to="/classify/train">Go to training</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <WizardSteps steps={classificationSteps} />
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between flex-wrap gap-2">
+            <span className="flex items-center gap-2">
+              <FileText className="h-5 w-5" /> Report Preview
+            </span>
+            <Button onClick={download} disabled={downloadReport.isPending}>
+              {downloadReport.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4 mr-2" />
+              )}
+              Download PDF Report
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <Sec title="Dataset Information">
+            <p>Name: {state.dataset?.name ?? "—"}</p>
+            <p>
+              Rows: {state.dataset?.totalRows ?? state.dataset?.rows.length ?? 0} · Columns:{" "}
+              {state.dataset?.columns.length ?? 0}
+            </p>
+          </Sec>
+          <Sec title="Selected Features">
+            <div className="flex flex-wrap gap-1">
+              {state.features.map((f) => (
+                <Badge key={f} variant="secondary">
+                  {f}
+                </Badge>
+              ))}
+            </div>
+            <p className="mt-2">
+              Target: <Badge>{state.target ?? "—"}</Badge>
+            </p>
+            {state.classes && state.classes.length > 0 && (
+              <p className="mt-2 text-muted-foreground">
+                Classes: {state.classes.join(", ")}
+              </p>
+            )}
+          </Sec>
+          <Sec title="Preprocessing">
+            <p>
+              Missing: {state.preprocessing.missing} · Dedupe: {String(state.preprocessing.dedupe)}{" "}
+              · Outlier: {state.preprocessing.outlier} · Scaling: {state.preprocessing.scaling}
+            </p>
+          </Sec>
+          <Sec title="Split Ratio">
+            <p>
+              Train {state.split.train}% · Test{" "}
+              {100 - state.split.train - (state.split.useVal ? state.split.val : 0)}%
+              {state.split.useVal ? ` · Val ${state.split.val}%` : ""}
+            </p>
+            {state.trainedRowCounts && (
+              <p className="text-muted-foreground">
+                {state.trainedRowCounts.total} total rows · {state.trainedRowCounts.train} training
+                rows · {state.trainedRowCounts.test} testing rows
+                {state.trainedRowCounts.val > 0 ? ` · ${state.trainedRowCounts.val} validation rows` : ""}
+              </p>
+            )}
+          </Sec>
+          <Sec title="Algorithm">
+            <p>{state.model ?? "—"}</p>
+          </Sec>
+          <Sec title="Evaluation Metrics">
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(state.results)
+                .filter(([k]) => !NON_SCALAR_METRIC_KEYS.has(k))
+                .map(([k, v]) => (
+                  <Badge key={k} variant="outline">
+                    {k}: {typeof v === "number" ? v.toFixed(4) : String(v)}
+                  </Badge>
+                ))}
+            </div>
+          </Sec>
+          <Sec title="Prediction">
+            <p>
+              {state.prediction
+                ? `Sample predicted class: ${state.prediction.label}`
+                : "No prediction made yet"}
+            </p>
+          </Sec>
+          <p className="text-xs text-muted-foreground">
+            The downloaded PDF includes the confusion matrix, per-class performance, diagnostic
+            charts, and the AI-generated explanation report — generated fresh from your trained
+            model.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function Sec({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <h3 className="font-semibold text-sm mb-2 uppercase tracking-wide text-muted-foreground">
+        {title}
+      </h3>
+      <div className="text-sm">{children}</div>
+    </div>
+  );
+}

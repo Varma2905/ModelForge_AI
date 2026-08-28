@@ -5,6 +5,11 @@ export type Dataset = {
   name: string;
   columns: string[];
   rows: (string | number | null)[][];
+  // The dataset's true total row count, from the backend's row_count/total_rows
+  // (not `rows.length` — `rows` here may be a preview-capped slice, see
+  // new.upload.tsx). Training itself always uses the full dataset server-side
+  // regardless of this value; this is display-only.
+  totalRows: number;
 };
 
 export type AnalysisState = {
@@ -18,6 +23,10 @@ export type AnalysisState = {
   datasetStats: { missingValues: number; dataTypes: Record<string, string> } | null;
   features: string[];
   target: string | null;
+  // Set from the Variables step's /datasets/{id}/profile lookup — which of
+  // the selected `features` are numerical vs. categorical, so later steps
+  // don't have to re-derive it.
+  featureKinds: Record<string, "numerical" | "categorical"> | null;
   preprocessing: {
     missing: string;
     dedupe: boolean;
@@ -36,7 +45,10 @@ export type AnalysisState = {
   metrics: string[];
   trained: boolean;
   trainingTimeMs: number;
-  results: Partial<ModelMetrics> & Record<string, number>;
+  // Actual rows the training run used, as reported back by the backend after
+  // train_test_split — not derived from any client-side/preview-capped array.
+  trainedRowCounts: { total: number; train: number; test: number; val: number } | null;
+  results: Partial<ModelMetrics> & Record<string, number | null | undefined>;
   statisticalAnalysis: StatisticalAnalysis | null;
   chartData: ChartData | null;
   prediction: number | null;
@@ -51,6 +63,7 @@ const defaultState: AnalysisState = {
   datasetStats: null,
   features: [],
   target: null,
+  featureKinds: null,
   preprocessing: {
     missing: "mean",
     dedupe: true,
@@ -63,6 +76,7 @@ const defaultState: AnalysisState = {
   metrics: ["MSE", "RMSE", "R2"],
   trained: false,
   trainingTimeMs: 0,
+  trainedRowCounts: null,
   results: {},
   statisticalAnalysis: null,
   chartData: null,

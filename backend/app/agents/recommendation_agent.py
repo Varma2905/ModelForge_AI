@@ -1,7 +1,8 @@
 import logging
 import os
-from typing import Dict, Any, List
-from app.agents.dataset_agent import get_llm
+from typing import Dict, Any, List, Optional
+from app.services.huggingface_service import get_llm
+from app.ml.feature_types import map_expanded_coefficients
 
 logger = logging.getLogger("regression_studio.agents")
 
@@ -14,7 +15,10 @@ class RecommendationAgent:
     def __init__(self):
         self.llm = get_llm()
 
-    async def recommend(self, model_name: str, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str) -> str:
+    async def recommend(
+        self, model_name: str, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str,
+        numeric_features: Optional[List[str]] = None, categorical_features: Optional[List[str]] = None,
+    ) -> str:
         """
         Provides actionable suggestions to improve model accuracy, clean data, and try alternate algorithms.
         """
@@ -36,13 +40,40 @@ class RecommendationAgent:
                 logger.warning(f"RecommendationAgent LLM failed: {e}. Falling back to analytical suggestions.")
 
         # Analytical fallback
-        return self._generate_analytical_fallback(model_name, metrics, stats, features, target)
+        return self._generate_analytical_fallback(
+            model_name, metrics, stats, features, target, numeric_features, categorical_features,
+        )
 
-    def _generate_analytical_fallback(self, model_name: str, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str) -> str:
+    def _generate_analytical_fallback(
+        self, model_name: str, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str,
+        numeric_features: Optional[List[str]] = None, categorical_features: Optional[List[str]] = None,
+    ) -> str:
         r2 = metrics.get("R2", 0.0)
         p_values = stats.get("p_values", {})
-        
-        insignificant_feats = [f for f in features if p_values.get(f, 0.5) > 0.05]
+
+        # p_values is keyed by expanded pipeline output names (e.g.
+        # "cat__city_Chennai" for a categorical column — one entry PER
+        # CATEGORY, not one per original selected feature), so iterating
+        # `features` directly and doing a dict lookup by original name would
+        # silently miss every categorical feature. Map through the same
+        # shared helper used everywhere else this problem shows up (PDF
+        # report, charts, explanation agent).
+        numeric_feats = numeric_features if numeric_features is not None else features
+        categorical_feats = categorical_features or []
+        encoded_categorical_names = [k[len("cat__"):] for k in p_values if k.startswith("cat__")]
+        mapped_pvalues = map_expanded_coefficients(
+            {k: v for k, v in p_values.items() if k != "const"},
+            numeric_feats, categorical_feats, encoded_categorical_names,
+        )
+        # p_values.get(f, 0.5)-style fallback only applies when a key is
+        # absent — an unresolved statsmodels p-value (near-singular design
+        # matrix, sanitized NaN -> None) is stored as an explicit None, so it
+        # must be excluded before comparing rather than silently treated as
+        # > 0.05.
+        insignificant_feats = [
+            e["feature"] for e in mapped_pvalues
+            if isinstance(e["value"], (int, float)) and e["value"] > 0.05
+        ]
         
         recommendations = ["### Diagnostic Recommendations & Next Steps\n"]
         

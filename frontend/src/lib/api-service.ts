@@ -7,45 +7,43 @@ import type {
   AIExplainResult,
   AuthPayload,
   AuthUser,
-  BaasApiKey,
-  BaasApiKeyCreateResult,
-  BaasColumn,
-  BaasCredentials,
-  BaasProject,
-  BaasProjectCreateResult,
-  BaasRecord,
-  BaasRecordListResult,
-  BaasTable,
   ChartData,
   ChatResult,
-  ConnectionInput,
+  ClassificationModelEntry,
+  ClassificationModelMetricsResult,
+  ClassificationSelectFeaturesResult,
+  ClassPredictionResult,
+  ClusteringModelEntry,
+  ClusteringModelMetricsResult,
+  ClusteringSelectFeaturesResult,
+  TrainClusteringModelResult,
   DashboardSummary,
-  DataSourcePreview,
-  DataSourceSummary,
   DataSplitConfig,
   DatasetListItem,
   DatasetModelListItem,
   DatasetPreview,
+  DatasetProfile,
+  DatasetSourcesStatus,
   DatasetSummary,
+  GoogleDriveFile,
   GraphsResult,
+  KaggleResolveResult,
+  KaggleStatus,
   HFCompatibilityResult,
   HFModelDetails,
   HFModelSummary,
   HFRunModelRequest,
   HFRunModelResult,
-  DBQueryExportRequest,
-  NLQueryRequest,
-  NLQueryResult,
-  ImportDatasetResult,
-  ImportTableRequest,
   ModelListItem,
   ModelMetricsResult,
   PredictionResult,
+  PredictionValues,
   PreprocessConfig,
   PreprocessResult,
+  RegressionModelEntry,
+  SelectFeaturesResult,
   SplitPreview,
-  TablesResult,
-  TestConnectionResult,
+  TrainClassificationModelResult,
   TrainModelResult,
 } from "./api-types";
 
@@ -173,50 +171,6 @@ async function getBlob(path: string): Promise<Blob> {
   return res.blob();
 }
 
-async function postBlob(path: string, body: unknown): Promise<Blob> {
-  const res = await fetch(`${getApiBaseUrl()}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    let message = `Request failed with status ${res.status}`;
-    try {
-      const errBody = await res.json();
-      if (errBody?.error?.message) message = errBody.error.message;
-    } catch {
-      // ignore
-    }
-    if (res.status === 401) clearToken();
-    throw new ApiError(res.status, message);
-  }
-  return res.blob();
-}
-
-// --- Backend as a Service: public data API ---
-// Deliberately NOT routed through request()/authHeaders() — these calls are
-// authenticated with a project's public/secret key pair (X-Public-Key /
-// X-Secret-Key headers), never the Studio's own JWT. Used by the Studio's
-// own "Data" tab (baas.$projectId.tsx), which asks the user to paste their
-// project's secret key inline rather than reading any stored auth state.
-function baasHeaders(creds: BaasCredentials): Record<string, string> {
-  const headers: Record<string, string> = { "X-Public-Key": creds.publicKey };
-  if (creds.secretKey) headers["X-Secret-Key"] = creds.secretKey;
-  return headers;
-}
-
-async function baasRequest<T>(path: string, creds: BaasCredentials, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getApiBaseUrl()}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...baasHeaders(creds),
-      ...(init?.headers ?? {}),
-    },
-  });
-  return unwrap<T>(res);
-}
-
 // --- AI Assistant streaming chat ---
 // Not routed through request()/unwrap() like the rest of the client: a
 // successful response here is a raw text/event-stream body, not the usual
@@ -337,13 +291,31 @@ export const api = {
     post<DatasetSummary>("/create-dataset", payload),
   previewDataset: (datasetId: string, limit = 200) =>
     get<DatasetPreview>(`/preview-dataset/${datasetId}?limit=${limit}`),
+  datasetProfile: (datasetId: string) => get<DatasetProfile>(`/datasets/${datasetId}/profile`),
   listDatasets: () => get<DatasetListItem[]>("/datasets"),
   listDatasetModels: (datasetId: string) =>
     get<DatasetModelListItem[]>(`/datasets/${datasetId}/models`),
+  deleteDataset: (datasetId: string) => del<{ deleted: boolean }>(`/datasets/${datasetId}`),
+
+  // Dataset sources (Kaggle / Google Drive)
+  datasetSourcesStatus: () => get<DatasetSourcesStatus>("/datasets/sources/status"),
+  kaggleStatus: () => get<KaggleStatus>("/datasets/kaggle/status"),
+  connectKaggle: (payload: { username: string; key: string }) =>
+    post<KaggleStatus>("/datasets/kaggle/connect", payload),
+  disconnectKaggle: () => post<{ connected: boolean }>("/datasets/kaggle/disconnect", {}),
+  resolveKaggleDataset: (payload: { dataset_ref: string }) =>
+    post<KaggleResolveResult>("/datasets/kaggle/resolve", payload),
+  importKaggleDataset: (payload: { dataset_ref: string; file_name: string }) =>
+    post<DatasetSummary>("/datasets/kaggle/import", payload),
+  googleDriveAuthUrl: () => get<{ auth_url: string }>("/datasets/google-drive/auth-url"),
+  listGoogleDriveFiles: (session: string) =>
+    get<{ files: GoogleDriveFile[] }>(`/datasets/google-drive/files?session=${encodeURIComponent(session)}`),
+  importGoogleDriveFile: (payload: { session: string; file_id: string; file_name: string }) =>
+    post<DatasetSummary>("/datasets/google-drive/import", payload),
 
   // Preprocessing / features / split
   selectFeatures: (payload: { dataset_id: string; features: string[]; target: string }) =>
-    post<{ status: string; features: string[]; target: string }>("/select-features", payload),
+    post<SelectFeaturesResult>("/select-features", payload),
   preprocess: (payload: { dataset_id: string; config: PreprocessConfig }) =>
     post<PreprocessResult>("/preprocess", payload),
   splitPreview: (payload: { dataset_id: string; config: DataSplitConfig }) =>
@@ -360,8 +332,48 @@ export const api = {
   }) => post<TrainModelResult>("/train-model", payload),
   getModelMetrics: (modelId: string) => get<ModelMetricsResult>(`/model-metrics/${modelId}`),
   listModels: () => get<ModelListItem[]>("/models"),
-  predict: (payload: { model_id: string; values: Record<string, number> }) =>
+  listRegressionModels: () => get<RegressionModelEntry[]>("/regression-models"),
+  deleteModel: (modelId: string) => del<{ deleted: boolean }>(`/models/${modelId}`),
+  predict: (payload: { model_id: string; values: PredictionValues }) =>
     post<PredictionResult>("/predict", payload),
+
+  // Classification — select-features/train-model are dedicated endpoints
+  // (different target-validation rule, different pipeline/metrics engine);
+  // model-metrics/predict reuse the exact same backend routes as regression
+  // (already generic over any model doc's model_type), just typed
+  // differently here for the classification wizard's callers.
+  selectClassificationFeatures: (payload: { dataset_id: string; features: string[]; target: string }) =>
+    post<ClassificationSelectFeaturesResult>("/classify/select-features", payload),
+  listClassificationModels: () => get<ClassificationModelEntry[]>("/classify/classification-models"),
+  trainClassificationModel: (payload: {
+    dataset_id: string;
+    model: string;
+    features: string[];
+    target: string;
+    split: DataSplitConfig;
+    hyperparameters?: Record<string, unknown>;
+  }) => post<TrainClassificationModelResult>("/classify/train-model", payload),
+  getClassificationModelMetrics: (modelId: string) =>
+    get<ClassificationModelMetricsResult>(`/model-metrics/${modelId}`),
+  predictClass: (payload: { model_id: string; values: PredictionValues }) =>
+    post<ClassPredictionResult>("/predict", payload),
+
+  // Clustering — unsupervised, so there is no target column and no
+  // train/test split; select-features/train-model are dedicated endpoints
+  // for that reason, and model-metrics is its own route (not the shared
+  // regression/classification one) since the response shape is genuinely
+  // different (cluster_profiles/cluster_sizes/visualizations, no target).
+  listClusteringModels: () => get<ClusteringModelEntry[]>("/cluster/clustering-models"),
+  selectClusteringFeatures: (payload: { dataset_id: string; features: string[] }) =>
+    post<ClusteringSelectFeaturesResult>("/cluster/select-features", payload),
+  trainClusteringModel: (payload: {
+    dataset_id: string;
+    model: string;
+    features: string[];
+    hyperparameters?: Record<string, unknown>;
+  }) => post<TrainClusteringModelResult>("/cluster/train-model", payload),
+  getClusteringModelMetrics: (modelId: string) =>
+    get<ClusteringModelMetricsResult>(`/cluster/model-metrics/${modelId}`),
 
   // AI
   explainModel: (modelId: string) => post<AIExplainResult>("/ai/explain", { model_id: modelId }),
@@ -374,26 +386,6 @@ export const api = {
 
   // Dashboard
   dashboardSummary: () => get<DashboardSummary>("/dashboard/summary"),
-
-  // Data Sources
-  testConnection: (connection: ConnectionInput) =>
-    post<TestConnectionResult>("/data-sources/test", { connection }),
-  createDataSource: (payload: { name: string; connection: ConnectionInput }) =>
-    post<DataSourceSummary>("/data-sources", payload),
-  listDataSources: () => get<DataSourceSummary[]>("/data-sources"),
-  getDataSource: (id: string) => get<DataSourceSummary>(`/data-sources/${id}`),
-  testSavedDataSource: (id: string) => post<TestConnectionResult>(`/data-sources/${id}/test`),
-  deleteDataSource: (id: string) => del<{ deleted: boolean }>(`/data-sources/${id}`),
-  listDataSourceDatabases: (id: string) =>
-    get<{ databases: string[] }>(`/data-sources/${id}/databases`),
-  listDataSourceTables: (id: string, database: string) =>
-    get<TablesResult>(`/data-sources/${id}/tables?database=${encodeURIComponent(database)}`),
-  previewDataSourceTable: (id: string, database: string, table: string, limit = 100) =>
-    get<DataSourcePreview>(
-      `/data-sources/${id}/preview?database=${encodeURIComponent(database)}&table=${encodeURIComponent(table)}&limit=${limit}`,
-    ),
-  importDataSourceTable: (id: string, payload: ImportTableRequest) =>
-    post<ImportDatasetResult>(`/data-sources/${id}/import`, payload),
 
   // Hugging Face Models
   searchHfModels: (params: { query?: string; task?: string; limit?: number }) => {
@@ -411,54 +403,6 @@ export const api = {
     }),
   runHfModel: (modelId: string, payload: HFRunModelRequest) =>
     post<HFRunModelResult>(`/hf/models/${encodeURIComponent(modelId)}/run`, payload),
-
-  // Database AI Query
-  askDatabaseQuestion: (payload: NLQueryRequest) => post<NLQueryResult>("/db-query/ask", payload),
-  exportDbQueryReport: (payload: DBQueryExportRequest) => postBlob("/db-query/export", payload),
-
-  // Backend as a Service — management (Studio JWT)
-  createBaasProject: (name: string) => post<BaasProjectCreateResult>("/baas/projects", { name }),
-  listBaasProjects: () => get<BaasProject[]>("/baas/projects"),
-  getBaasProject: (id: string) => get<BaasProject>(`/baas/projects/${id}`),
-  deleteBaasProject: (id: string) => del<{ deleted: boolean }>(`/baas/projects/${id}`),
-  createBaasKey: (projectId: string, label?: string) =>
-    post<BaasApiKeyCreateResult>(`/baas/projects/${projectId}/keys`, { label }),
-  listBaasKeys: (projectId: string) => get<BaasApiKey[]>(`/baas/projects/${projectId}/keys`),
-  revokeBaasKey: (projectId: string, keyId: string) =>
-    post<{ revoked: boolean }>(`/baas/projects/${projectId}/keys/${keyId}/revoke`),
-  proposeBaasSchema: (projectId: string, description: string) =>
-    post<{ columns: BaasColumn[] }>(`/baas/projects/${projectId}/tables/propose-schema`, { description }),
-  createBaasTable: (projectId: string, payload: { name: string; columns: BaasColumn[] }) =>
-    post<BaasTable>(`/baas/projects/${projectId}/tables`, payload),
-  listBaasTables: (projectId: string) => get<BaasTable[]>(`/baas/projects/${projectId}/tables`),
-
-  // Backend as a Service — public data API (public/secret key, not JWT)
-  listBaasRecords: (creds: BaasCredentials, tableName: string, limit = 50) =>
-    baasRequest<BaasRecordListResult>(
-      `/baas/data/${encodeURIComponent(tableName)}?limit=${limit}`,
-      creds,
-    ),
-  getBaasRecord: (creds: BaasCredentials, tableName: string, recordId: string) =>
-    baasRequest<BaasRecord>(`/baas/data/${encodeURIComponent(tableName)}/${recordId}`, creds),
-  createBaasRecord: (creds: BaasCredentials, tableName: string, data: Record<string, unknown>) =>
-    baasRequest<BaasRecord>(`/baas/data/${encodeURIComponent(tableName)}`, creds, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  updateBaasRecord: (
-    creds: BaasCredentials,
-    tableName: string,
-    recordId: string,
-    data: Record<string, unknown>,
-  ) =>
-    baasRequest<BaasRecord>(`/baas/data/${encodeURIComponent(tableName)}/${recordId}`, creds, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
-  deleteBaasRecord: (creds: BaasCredentials, tableName: string, recordId: string) =>
-    baasRequest<{ deleted: boolean }>(`/baas/data/${encodeURIComponent(tableName)}/${recordId}`, creds, {
-      method: "DELETE",
-    }),
 };
 
 export type { ChartData };

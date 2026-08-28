@@ -63,6 +63,12 @@ function TrainPage() {
             trainingTimeMs: Date.now() - start,
             modelId: result.model_id,
             results: result.metrics,
+            trainedRowCounts: {
+              total: result.total_rows,
+              train: result.train_rows,
+              test: result.test_rows,
+              val: result.val_rows,
+            },
           });
         },
         onError: (err) => {
@@ -103,13 +109,22 @@ function TrainPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
-            <Info label="Dataset size" value={`${state.dataset?.rows.length ?? 0} rows`} />
+            <Info
+              label="Dataset size"
+              value={`${state.trainedRowCounts?.total ?? state.dataset?.totalRows ?? state.dataset?.rows.length ?? 0} rows`}
+            />
             <Info label="Features" value={state.features.join(", ") || "—"} />
             <Info label="Algorithm" value={state.model ?? "—"} />
             <Info
               label="Time"
               value={done ? `${(state.trainingTimeMs / 1000).toFixed(1)}s` : "…"}
             />
+            {done && state.trainedRowCounts && (
+              <>
+                <Info label="Training rows" value={`${state.trainedRowCounts.train} rows`} />
+                <Info label="Testing rows" value={`${state.trainedRowCounts.test} rows`} />
+              </>
+            )}
           </div>
 
           {isIdle && (

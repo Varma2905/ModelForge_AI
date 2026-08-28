@@ -1,4 +1,4 @@
-# AI Regression Studio Backend Dependencies
+# ModelForge AI Studio Backend Dependencies
 
 # FastAPI Core
 fastapi>=0.110.0
@@ -13,6 +13,10 @@ bcrypt>=4.1.2
 pyjwt>=2.8.0
 email-validator>=2.1.0
 
+# Encryption at rest for per-user third-party credentials (e.g. Kaggle API
+# keys) stored in the user_integrations collection
+cryptography>=42.0.0
+
 # Testing
 pytest>=8.0.0
 httpx>=0.27.0
@@ -25,15 +29,32 @@ scipy>=1.12.0
 statsmodels>=0.14.1
 openpyxl>=3.1.2
 
+# Optional tree-boosting regression/classification models — imported lazily
+# (see regression_models.py / classification_models.py) so their absence
+# doesn't crash the app; regression_registry.py reports them as
+# "unavailable" rather than "available" if not installed.
+xgboost>=2.0.0
+lightgbm>=4.3.0
+catboost>=1.2.0
+
 # Database
 pymongo>=4.6.2
 motor>=3.3.2
 
-# External database connectors (Data Sources feature)
-pymysql>=1.1.0
-psycopg2-binary>=2.9.9
-sqlparse>=0.5.0
-cryptography>=42.0.0
+# Dataset file formats (filesystem storage, no DB — internal storage uses
+# pandas' native pickle format; pyarrow is only needed to read a .parquet
+# file a user uploads/imports, not for internal storage)
+pyarrow>=14.0.0
+
+# Dataset Sources
+# kaggle>=2.0.0 — the response-shape assumptions in kaggle_provider.py
+# (ApiListDatasetFilesResponse.dataset_files / .total_bytes, and the
+# config_values-based per-user credential isolation) are specific to the
+# 2.x kagglesdk-backed client, not the older 1.x REST client.
+kaggle>=2.0.0
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
 
 # Visualization
 matplotlib>=3.8.3
@@ -43,13 +64,12 @@ plotly>=5.19.0
 # PDF Report Generation
 reportlab>=4.1.0
 
-# LLM & Agentic AI
-openai>=1.13.0
-google-generativeai>=0.4.0
-langchain>=0.1.11
-langchain-community>=0.0.25
-langchain-openai>=0.1.0
-langchain-google-genai>=1.0.0
+# LLM & Agentic AI — Hugging Face Inference API is the sole LLM provider
+# (see app/services/huggingface_service.py). langchain-core supplies only
+# the provider-agnostic SystemMessage/HumanMessage/AIMessage schema the
+# report-explanation agents and the AI Assistant chat endpoint build
+# requests with; no LangChain chat-model integration package is used.
+langchain-core>=0.1.28
 
-# Hugging Face Model Engine (search/metadata/compatibility)
+# Hugging Face — LLM inference (AI Assistant) + Hub model search/metadata
 huggingface_hub>=0.24.0

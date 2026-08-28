@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -12,10 +13,15 @@ from typing import List, Dict, Any, Literal, Optional
 
 from app.auth.dependencies import get_current_user
 from app.database.mongodb import db_client
-from app.agents.dataset_agent import DatasetAnalysisAgent, get_llm
+from app.datasets import store as dataset_store
+from app.agents.dataset_agent import DatasetAnalysisAgent
+from app.services.huggingface_service import get_llm
 from app.agents.ml_agent import MLModelExplanationAgent
 from app.agents.explanation_agent import StatisticalInterpretationAgent
 from app.agents.recommendation_agent import RecommendationAgent
+from app.agents.classification_explanation_agent import ClassificationInterpretationAgent
+from app.agents.classification_recommendation_agent import ClassificationRecommendationAgent
+from app.agents.clustering_explanation_agent import ClusteringInterpretationAgent
 from app.agents.report_agent import ReportAgent
 from app.utils.response import ok
 
@@ -32,6 +38,10 @@ router = APIRouter(prefix="", tags=["Agentic AI Systems"])
 # ── Chat Models ───────────────────────────────────────────────────────────────
 class ChatMessage(BaseModel):
     message: str
+    # `provider` is accepted for backward compatibility with older callers
+    # but ignored — Hugging Face is the only supported LLM provider now (see
+    # app/services/huggingface_service.py). `model` still works as a
+    # per-request override of HF_MODEL.
     provider: Optional[str] = None
     model: Optional[str] = None
 
@@ -48,6 +58,113 @@ class AIExplainResponse(BaseModel):
     insights: List[str]
     full_report: str
 
+async def _run_clustering_explanation_pipeline(model_doc: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    """Clustering's AI Insights pipeline — kept separate from the shared
+    regression/classification pipeline below rather than another branch
+    inside it, since clustering has a genuinely different shape: no target
+    column, no statistical_analysis (coefficients/p-values), and a single
+    ClusteringInterpretationAgent call already produces both the
+    interpretation AND recommendations in one markdown block (see that
+    agent's docstring), so there's no separate rec_agent call to make.
+    """
+    model_id = model_doc["_id"]
+    dataset_doc = dataset_store.load_meta(model_doc["dataset_id"])
+    if not dataset_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset with ID {model_doc['dataset_id']} referencing model was not found."
+        )
+
+    dataset_agent = DatasetAnalysisAgent()
+    ml_agent = MLModelExplanationAgent()
+    clustering_agent = ClusteringInterpretationAgent()
+
+    df_summary = {
+        "name": dataset_doc["name"],
+        "rows": dataset_doc["row_count"],
+        "columns": dataset_doc["col_count"],
+        "column_names": dataset_doc["columns"],
+        "data_types": dataset_doc["data_types"],
+    }
+
+    dataset_analysis, model_explanation, clustering_explanation = await asyncio.gather(
+        dataset_agent.analyze(df_summary),
+        ml_agent.explain(model_doc["model"], model_doc.get("hyperparameters"), model_type="clustering"),
+        clustering_agent.explain(
+            model_name=model_doc["model"],
+            metrics=model_doc["metrics"],
+            cluster_sizes=model_doc.get("cluster_sizes", {}),
+            cluster_profiles=model_doc.get("cluster_profiles", []),
+            features=model_doc["features"],
+            total_rows=model_doc.get("total_rows", 0),
+        ),
+    )
+
+    metrics = model_doc["metrics"]
+    silhouette = metrics.get("Silhouette")
+    n_clusters = metrics.get("ClusterCount", 0)
+    kpi_line = (
+        f"Clusters = `{n_clusters}` | Silhouette = `{silhouette:.3f}`"
+        if isinstance(silhouette, (int, float))
+        else f"Clusters = `{n_clusters}` | Silhouette = `N/A`"
+    )
+    summary_text = (
+        f"The {model_doc['model']} run found {n_clusters} clusters"
+        + (f" with a Silhouette Score of {silhouette:.2f}." if isinstance(silhouette, (int, float)) else ".")
+    )
+
+    full_report = f"""# MODELFORGE AI STUDIO EXECUTIVE REPORT
+**Dataset:** {dataset_doc['name']} | **Algorithm:** {model_doc['model']}
+**Key Performance Indicators:** {kpi_line}
+
+---
+
+## Executive Summary
+This document provides a comprehensive report of the unsupervised clustering analysis carried out on the dataset `{dataset_doc['name']}` using `{model_doc['model']}`. {summary_text} Detailed explanations of the dataset structure, algorithm methodology, and cluster-level findings are compiled below by the AI Agent Network.
+
+---
+
+{dataset_analysis}
+
+---
+
+{model_explanation}
+
+---
+
+{clustering_explanation}
+"""
+
+    insights = []
+    bullet_points = re.findall(r'^\s*[-•]\s+(.*?)$', clustering_explanation, re.MULTILINE)
+    for bp in bullet_points:
+        clean_bp = bp.replace("**", "").replace("`", "").strip()
+        if len(clean_bp) > 10 and clean_bp not in insights:
+            insights.append(clean_bp)
+    if not insights:
+        insights = [
+            f"{model_doc['model']} found {n_clusters} clusters across {model_doc.get('total_rows', 0)} samples.",
+            f"Features used: {', '.join(model_doc['features'])}.",
+            "Review the Clustering Interpretation section for per-cluster characteristics and recommendations.",
+        ]
+    insights = insights[:4]
+
+    await db_client.update_one("models", {"_id": model_id}, {"$set": {"ai_explanation": full_report}})
+
+    report_doc = {
+        "_id": f"rep_{model_id}",
+        "user_id": user_id,
+        "model_id": model_id,
+        "summary": summary_text,
+        "insights": insights,
+        "full_report": full_report,
+        "created_at": pd.Timestamp.now().isoformat(),
+    }
+    await db_client.insert_one("reports", report_doc)
+
+    return {"summary": summary_text, "insights": insights, "full_report": full_report}
+
+
 async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, Any]:
     # 1. Fetch model document, scoped to the requesting user
     model_doc = await db_client.find_one("models", {"_id": model_id})
@@ -57,19 +174,28 @@ async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, 
             detail=f"Model with ID {model_id} not found."
         )
 
+    if model_doc.get("model_type") == "clustering":
+        return await _run_clustering_explanation_pipeline(model_doc, user_id)
+
     # 2. Fetch dataset document
-    dataset_doc = await db_client.find_one("datasets", {"_id": model_doc["dataset_id"]})
+    dataset_doc = dataset_store.load_meta(model_doc["dataset_id"])
     if not dataset_doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Dataset with ID {model_doc['dataset_id']} referencing model was not found."
         )
 
-    # 3. Instantiate agents
+    # 3. Instantiate agents — classification and regression get genuinely
+    # separate interpretation/recommendation agents (see
+    # classification_explanation_agent.py's docstring for why a task_type
+    # flag inside one shared class wasn't the right shape here), selected by
+    # the model doc's model_type (missing key -> "regression", for every
+    # model trained before this field existed).
+    is_classification = model_doc.get("model_type", "regression") == "classification"
     dataset_agent = DatasetAnalysisAgent()
     ml_agent = MLModelExplanationAgent()
-    explanation_agent = StatisticalInterpretationAgent()
-    rec_agent = RecommendationAgent()
+    explanation_agent = ClassificationInterpretationAgent() if is_classification else StatisticalInterpretationAgent()
+    rec_agent = ClassificationRecommendationAgent() if is_classification else RecommendationAgent()
     report_agent = ReportAgent()
 
     # 4. Generate summaries asynchronously
@@ -81,21 +207,30 @@ async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, 
         "data_types": dataset_doc["data_types"]
     }
 
-    # Build components
-    dataset_analysis = await dataset_agent.analyze(df_summary)
-    model_explanation = await ml_agent.explain(model_doc["model"], model_doc.get("hyperparameters"))
-    stats_explanation = await explanation_agent.explain(
-        metrics=model_doc["metrics"],
-        stats=model_doc["statistical_analysis"],
-        features=model_doc["features"],
-        target=model_doc["target"]
-    )
-    recommendations = await rec_agent.recommend(
-        model_name=model_doc["model"],
-        metrics=model_doc["metrics"],
-        stats=model_doc["statistical_analysis"],
-        features=model_doc["features"],
-        target=model_doc["target"]
+    # Build components. These four are independent of each other (none
+    # consumes another's output), so run them concurrently instead of
+    # awaiting them one-by-one — each is its own LLM round-trip, and doing
+    # them sequentially was the main reason this pipeline felt slow.
+    dataset_analysis, model_explanation, stats_explanation, recommendations = await asyncio.gather(
+        dataset_agent.analyze(df_summary),
+        ml_agent.explain(model_doc["model"], model_doc.get("hyperparameters"), model_type=model_doc.get("model_type", "regression")),
+        explanation_agent.explain(
+            metrics=model_doc["metrics"],
+            stats=model_doc["statistical_analysis"],
+            features=model_doc["features"],
+            numeric_features=model_doc.get("numerical_features", model_doc["features"]),
+            categorical_features=model_doc.get("categorical_features", []),
+            target=model_doc["target"]
+        ),
+        rec_agent.recommend(
+            model_name=model_doc["model"],
+            metrics=model_doc["metrics"],
+            stats=model_doc["statistical_analysis"],
+            features=model_doc["features"],
+            numeric_features=model_doc.get("numerical_features", model_doc["features"]),
+            categorical_features=model_doc.get("categorical_features", []),
+            target=model_doc["target"]
+        ),
     )
 
     # Combine into full report
@@ -106,14 +241,19 @@ async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, 
         dataset_analysis=dataset_analysis,
         model_explanation=model_explanation,
         stats_explanation=stats_explanation,
-        recommendations=recommendations
+        recommendations=recommendations,
+        model_type=model_doc.get("model_type", "regression"),
     )
 
     # 5. Extract summary and insights for JSON response
-    r2 = model_doc["metrics"].get("R2", 0.0)
-    summary_text = f"The model trained with {model_doc['model']} achieved an R² score of {r2:.2f}."
+    if is_classification:
+        accuracy = model_doc["metrics"].get("Accuracy", 0.0)
+        summary_text = f"The model trained with {model_doc['model']} achieved an accuracy of {accuracy:.2%}."
+    else:
+        r2 = model_doc["metrics"].get("R2", 0.0)
+        summary_text = f"The model trained with {model_doc['model']} achieved an R² score of {r2:.2f}."
 
-    # Try parsing the OLS interpretations for significant feature insights
+    # Try parsing the OLS/Logit interpretations for significant feature insights
     insights = []
     bullet_points = re.findall(r'^\s*[-•]\s+(.*?)$', stats_explanation + "\n" + recommendations, re.MULTILINE)
     for bp in bullet_points:
@@ -123,11 +263,18 @@ async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, 
 
     # Fallback default insights if parsing did not find bullet points
     if not insights:
-        insights = [
-            f"The features {', '.join(model_doc['features'])} were used to fit the regression line.",
-            f"The Mean Absolute Error (MAE) was calculated to be {model_doc['metrics'].get('MAE', 0.0):,.2f}.",
-            "Review diagnostic recommendations to check feature p-values and try alternative algorithms."
-        ]
+        if is_classification:
+            insights = [
+                f"The features {', '.join(model_doc['features'])} were used to classify {model_doc['target']}.",
+                f"The F1-score was calculated to be {model_doc['metrics'].get('F1', 0.0):.3f}.",
+                "Review diagnostic recommendations to check feature p-values and try alternative algorithms."
+            ]
+        else:
+            insights = [
+                f"The features {', '.join(model_doc['features'])} were used to fit the regression line.",
+                f"The Mean Absolute Error (MAE) was calculated to be {model_doc['metrics'].get('MAE', 0.0):,.2f}.",
+                "Review diagnostic recommendations to check feature p-values and try alternative algorithms."
+            ]
 
     # Slice to top 4 insights
     insights = insights[:4]
@@ -180,14 +327,29 @@ async def ai_explain_latest(current_user: dict = Depends(get_current_user)):
 
 
 # ── Chatbot Endpoint ──────────────────────────────────────────────────────────
-CHAT_SYSTEM_PROMPT = """You are an expert AI assistant specializing in regression analysis,
-machine learning, and data science. You help users understand statistical concepts,
-choose regression models, interpret results (R², RMSE, MAE, p-values, coefficients),
-and improve their models.
+CHAT_SYSTEM_PROMPT = """You are the ModelForge AI Assistant.
+
+You help users understand machine learning concepts and their generated
+analysis reports, covering regression, classification, and clustering.
+
+For report-based conversations, use the selected report as the primary
+source of truth. Never invent metrics, model results, dataset information,
+or statistical values. Do not modify reported values. If information is
+unavailable in the report, clearly say that it is not available.
+
+For regression reports, explain regression metrics and statistical results.
+For classification reports, explain classification metrics, confusion
+matrix results, precision, recall, F1, and related information.
+For clustering reports, explain clustering metrics, cluster quality, and
+cluster profiles. Do not mix information between different reports.
+
+The ML engine (Python / scikit-learn) is responsible for calculating every
+metric. You are responsible only for explaining and interpreting results
+that have already been calculated — never for calculating them yourself.
 
 Be concise, clear, and practical. Use bullet points when listing options.
-If a question is unrelated to data science or regression, politely redirect the
-conversation back to your area of expertise.
+If a question is unrelated to data science or machine learning, politely
+redirect the conversation back to your area of expertise.
 """
 
 def _chat_fallback(message: str) -> str:
@@ -279,7 +441,7 @@ async def chat(request: ChatMessage, current_user: dict = Depends(get_current_us
     return ChatResponse(reply=_chat_fallback(request.message), source="fallback")
 
 
-# ── Real-time Streaming Chat (ChatGPT-style) ────────────────────────────────
+# ── Real-time Streaming Chat (token-by-token, Server-Sent Events) ──────────
 MAX_MESSAGE_CHARS = 6000
 MAX_HISTORY_MESSAGES = 40
 MAX_CONTEXT_TURNS = 16  # most recent turns actually sent to the LLM
@@ -312,21 +474,18 @@ class AIChatTurn(BaseModel):
 
 class AIChatRequest(BaseModel):
     messages: List[AIChatTurn] = Field(..., min_length=1)
+    # Real-time chat when absent; report-based chat (this model's generated
+    # report is the analysis context) when present — see
+    # _build_model_context_text below.
     model_id: Optional[str] = None
+    # `provider` is accepted for backward compatibility with older callers
+    # but ignored — Hugging Face is the only supported LLM provider now.
+    # `model` still works as a per-request override of HF_MODEL.
     provider: Optional[str] = None
     model: Optional[str] = None
 
 
-async def _build_regression_context_text(model_id: str, user_id: str) -> Optional[str]:
-    """Builds a compact, human-readable summary of one of the user's trained
-    models for grounding chat answers. Returns None (silently) if the model
-    doesn't exist or isn't owned by this user — context is a nice-to-have,
-    not a reason to fail the whole chat request."""
-    model_doc = await db_client.find_one("models", {"_id": model_id})
-    if not model_doc or model_doc.get("user_id") != user_id:
-        return None
-
-    dataset_doc = await db_client.find_one("datasets", {"_id": model_doc.get("dataset_id")})
+def _regression_context_lines(model_doc: Dict[str, Any]) -> List[str]:
     metrics = model_doc.get("metrics", {}) or {}
     features = model_doc.get("features", []) or []
     target = model_doc.get("target", "")
@@ -335,13 +494,7 @@ async def _build_regression_context_text(model_id: str, user_id: str) -> Optiona
     importance = (model_doc.get("chart_data", {}) or {}).get("feature_importance", []) or []
     top_importance = sorted(importance, key=lambda x: abs(x.get("value", 0)), reverse=True)[:5]
 
-    lines = [
-        f"Dataset: {model_doc.get('dataset_name', 'unknown')}"
-        + (f" ({dataset_doc['row_count']} rows)" if dataset_doc and dataset_doc.get("row_count") else ""),
-        f"Model type: {model_doc.get('model', 'unknown')}",
-        f"Target column: {target}",
-        f"Features ({len(features)}): {', '.join(features) if features else 'none'}",
-    ]
+    lines = [f"Target column: {target}"]
 
     test_size = (model_doc.get("split") or {}).get("test_size")
     if test_size:
@@ -358,27 +511,129 @@ async def _build_regression_context_text(model_id: str, user_id: str) -> Optiona
         )
 
     if p_values and features:
-        significant = [f for f in features if p_values.get(f, 1) <= 0.05]
-        insignificant = [f for f in features if p_values.get(f, 1) > 0.05]
+        # p_values.get(f, 1) only falls back to 1 when `f` is absent — a
+        # statsmodels p-value that couldn't be resolved (near-singular design
+        # matrix, common with Polynomial Regression) is stored as an explicit
+        # None, not a missing key, so it must be filtered before comparing.
+        resolved_p = {f: p_values.get(f) for f in features if isinstance(p_values.get(f), (int, float))}
+        significant = [f for f, p in resolved_p.items() if p <= 0.05]
+        insignificant = [f for f, p in resolved_p.items() if p > 0.05]
         if significant:
             lines.append(f"Statistically significant features (p<=0.05): {', '.join(significant)}")
         if insignificant:
             lines.append(f"Not statistically significant (p>0.05): {', '.join(insignificant)}")
 
+    return lines
+
+
+def _classification_context_lines(model_doc: Dict[str, Any]) -> List[str]:
+    metrics = model_doc.get("metrics", {}) or {}
+    target = model_doc.get("target", "")
+    classes = metrics.get("Classes", []) or []
+
+    lines = [f"Target column: {target}"]
+    if classes:
+        lines.append(f"Classes ({len(classes)}): {', '.join(str(c) for c in classes)}")
+
+    test_size = (model_doc.get("split") or {}).get("test_size")
+    if test_size:
+        lines.append(f"Train/test split: {(1 - test_size) * 100:.0f}% train / {test_size * 100:.0f}% test")
+
+    numeric_metrics = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+    if numeric_metrics:
+        lines.append("Metrics on held-out test set: " + ", ".join(f"{k}={v:.4f}" for k, v in numeric_metrics.items()))
+
+    confusion = metrics.get("ConfusionMatrix")
+    if confusion and classes:
+        rows = "; ".join(
+            f"actual {classes[i]} -> [" + ", ".join(f"predicted {classes[j]}={confusion[i][j]}" for j in range(len(confusion[i]))) + "]"
+            for i in range(min(len(confusion), len(classes)))
+        )
+        lines.append(f"Confusion matrix (rows=actual, cols=predicted): {rows}")
+
+    report = metrics.get("ClassificationReport") or {}
+    per_class = {k: v for k, v in report.items() if k in [str(c) for c in classes]}
+    if per_class:
+        worst = sorted(per_class.items(), key=lambda kv: kv[1].get("f1-score", 1))[:3]
+        lines.append(
+            "Weakest classes by F1-score: "
+            + ", ".join(f"{cls} (precision={v.get('precision', 0):.2f}, recall={v.get('recall', 0):.2f}, f1={v.get('f1-score', 0):.2f}, support={v.get('support', 0)})" for cls, v in worst)
+        )
+
+    return lines
+
+
+def _clustering_context_lines(model_doc: Dict[str, Any]) -> List[str]:
+    metrics = model_doc.get("metrics", {}) or {}
+    cluster_sizes = model_doc.get("cluster_sizes", {}) or {}
+    cluster_profiles = model_doc.get("cluster_profiles", []) or []
+
+    lines = ["Unsupervised — no target column."]
+
+    numeric_metrics = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+    if numeric_metrics:
+        lines.append("Clustering quality metrics: " + ", ".join(f"{k}={v:.4f}" for k, v in numeric_metrics.items()))
+
+    if cluster_sizes:
+        lines.append("Cluster sizes: " + ", ".join(f"{('Noise' if k == '-1' else f'Cluster {k}')}={v}" for k, v in cluster_sizes.items()))
+
+    for profile in cluster_profiles[:8]:
+        chars = profile.get("important_characteristics") or []
+        if chars:
+            label = "Noise" if profile.get("cluster") == "Noise" else f"Cluster {profile.get('cluster')}"
+            lines.append(f"{label} ({profile.get('samples', 0)} samples) characteristics: " + "; ".join(chars[:3]))
+
+    return lines
+
+
+async def _build_model_context_text(model_id: str, user_id: str) -> Optional[str]:
+    """Builds a compact, human-readable summary of one of the user's trained
+    models/reports for grounding chat answers, branching on model_type so
+    regression, classification, and clustering each get their own genuinely
+    relevant fields (never regression metrics for a clustering report, etc.).
+    Returns None (silently) if the model doesn't exist or isn't owned by
+    this user — context is a nice-to-have, not a reason to fail the whole
+    chat request."""
+    model_doc = await db_client.find_one("models", {"_id": model_id})
+    if not model_doc or model_doc.get("user_id") != user_id:
+        return None
+
+    dataset_doc = dataset_store.load_meta(model_doc.get("dataset_id"))
+    model_type = model_doc.get("model_type", "regression")
+    features = model_doc.get("features", []) or []
+
+    lines = [
+        f"Report type: {model_type}",
+        f"Dataset: {model_doc.get('dataset_name', 'unknown')}"
+        + (f" ({dataset_doc['row_count']} rows)" if dataset_doc and dataset_doc.get("row_count") else ""),
+        f"Model / algorithm: {model_doc.get('model', 'unknown')}",
+        f"Features ({len(features)}): {', '.join(features) if features else 'none'}",
+    ]
+
+    if model_type == "classification":
+        lines.extend(_classification_context_lines(model_doc))
+    elif model_type == "clustering":
+        lines.extend(_clustering_context_lines(model_doc))
+    else:
+        lines.extend(_regression_context_lines(model_doc))
+
     return "\n".join(lines)
 
 
 def _classify_llm_error(exc: Exception) -> tuple[str, str]:
-    """Maps a raw provider exception to a safe (error_type, user_message) pair.
-    Never surfaces the raw exception text — it can contain request internals."""
+    """Maps a raw Hugging Face Inference API exception to a safe
+    (error_type, user_message) pair. Never surfaces the raw exception text,
+    a token, or a stack trace — it can contain request/response internals."""
     msg = str(exc).lower()
-    if any(tok in msg for tok in ("401", "unauthorized", "invalid api key", "invalid_api_key", "authenticate", "permission_denied", "403")):
-        return "auth", "Unable to authenticate with the AI service. Please check the backend API configuration."
-    if any(tok in msg for tok in ("429", "rate limit", "rate_limit", "quota", "resource_exhausted")):
+    if any(tok in msg for tok in ("401", "unauthorized", "invalid token", "invalid_token", "authenticate", "authentication", "403", "forbidden")):
+        return "auth", "Unable to authenticate with the AI service. Please check the backend's Hugging Face token configuration."
+    if any(tok in msg for tok in ("429", "rate limit", "rate_limit", "too many requests", "quota")):
         return "rate_limit", "The AI service is receiving too many requests right now. Please wait a moment and try again."
+    if any(tok in msg for tok in ("loading", "currently loading", "warming up", "overloaded", "503", "service unavailable")):
+        return "server", "The AI model is warming up. Please try again in a moment."
     if any(tok in msg for tok in ("timeout", "timed out", "connection", "network")):
-        return "network", "Connection failed. Please try again."
-    return "server", "The AI service encountered an error. Please try again."
+        return "network", "Unable to connect to the AI model right now. Please try again in a moment."
+    return "server", "Unable to connect to the AI model right now. Please try again in a moment."
 
 
 @router.post("/ai/chat")
@@ -410,27 +665,39 @@ async def ai_chat_stream(payload: AIChatRequest, current_user: dict = Depends(ge
     if not LANGCHAIN_SCHEMA_AVAILABLE:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI service is not configured. Please configure the AI API key on the backend.",
+            detail="AI service is not configured. Please set HF_TOKEN on the backend.",
         )
 
     llm = get_llm(provider=payload.provider, model=payload.model)
     if llm is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI service is not configured. Please configure the AI API key on the backend.",
+            detail="AI service is not configured. Please set HF_TOKEN on the backend.",
         )
 
     system_prompt = CHAT_SYSTEM_PROMPT
     if payload.model_id:
         try:
-            context_text = await _build_regression_context_text(payload.model_id, user_id)
+            context_text = await _build_model_context_text(payload.model_id, user_id)
         except Exception as e:
-            logger.warning(f"Failed to build regression context for chat: {e}")
+            logger.warning(f"Failed to build report context for chat: {e}")
             context_text = None
         if context_text:
             system_prompt += (
-                "\n\nThe user is currently looking at this trained regression model. "
-                "Use it to answer questions like 'why is my R2 low' concretely:\n" + context_text
+                "\n\nThe user has selected the following generated report as the analysis context. "
+                "Use this report as the primary source for answering questions.\n\n"
+                "Report:\n" + context_text + "\n\n"
+                "Rules:\n"
+                "1. Do not invent metrics or model results.\n"
+                "2. Do not change the reported values — use them exactly as given above.\n"
+                "3. Explain results using the provided report context.\n"
+                "4. Clearly state when information is unavailable in this report.\n"
+                "5. Do not claim causation when the report only shows correlation or association.\n"
+                "6. For regression, use the actual regression metrics and statistical results above.\n"
+                "7. For classification, use the actual classification metrics and confusion matrix information above.\n"
+                "8. For clustering, use the actual clustering metrics and cluster profiles above.\n"
+                "9. If the user asks something unrelated to this report, you may answer normally, "
+                "but do not pretend the answer came from the report."
             )
 
     lc_messages: List[Any] = [SystemMessage(content=system_prompt)]

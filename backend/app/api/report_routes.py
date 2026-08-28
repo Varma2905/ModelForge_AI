@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -5,7 +6,9 @@ from fastapi.responses import FileResponse
 from typing import Dict
 from app.auth.dependencies import get_current_user
 from app.database.mongodb import db_client
+from app.datasets import store as dataset_store
 from app.reports.pdf_generator import build_pdf_report
+from app.reports.dataset_profile import build_dataset_profile
 from app.api.ai_routes import run_ai_explanation_pipeline
 from app.api.training_routes import ensure_graphs
 from app.utils.response import ok
@@ -82,13 +85,25 @@ async def download_report(model_id: str, current_user: dict = Depends(get_curren
             # Reload model doc to get updated fields
             model_doc = await db_client.find_one("models", {"_id": model_id})
         except Exception as e:
-            ai_report_markdown = f"# AI REGRESSION STUDIO EXECUTIVE REPORT\n\nFailed to run AI Agent pipeline: {e}"
+            ai_report_markdown = f"# MODELFORGE AI STUDIO EXECUTIVE REPORT\n\nFailed to run AI Agent pipeline: {e}"
 
     # 3. Merge in the dataset's preprocessing_config, since the model doc itself
     #    doesn't carry it (fixes the PDF always showing fake 80/20 + mean/iqr/standard placeholders).
-    dataset_doc = await db_client.find_one("datasets", {"_id": model_doc.get("dataset_id")})
+    dataset_doc = dataset_store.load_meta(model_doc.get("dataset_id"))
     model_info = dict(model_doc)
     model_info["preprocessing"] = (dataset_doc or {}).get("preprocessing_config", {})
+
+    # 3.4 Dataset Overview / Feature Summary profile — computed fresh from
+    # the actual uploaded dataframe every time (see dataset_profile.py), not
+    # persisted on the model doc, so it always reflects that dataframe.
+    # Best-effort: a failure here (e.g. the source dataset was since
+    # deleted) degrades to those two sections being omitted rather than
+    # failing the whole report — see pdf_generator.py's `if dataset_profile:` guard.
+    try:
+        report_df = await asyncio.to_thread(dataset_store.load_dataframe, model_doc.get("dataset_id"))
+        model_info["dataset_profile"] = build_dataset_profile(report_df, model_doc.get("target"))
+    except Exception as e:
+        logger.warning(f"Dataset profiling failed for report on model {model_id}: {e}")
 
     # 3.5 Generate the PNG diagnostic charts now if training didn't (it no
     # longer does, by default — see training_routes.ensure_graphs).

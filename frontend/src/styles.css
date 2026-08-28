@@ -155,10 +155,40 @@
     border-color: var(--color-border);
   }
 
+  html {
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* Safety net, not a fix: legitimate causes of page-level horizontal
+     overflow (fixed widths, un-contained tables, missing min-w-0 on flex
+     children) are fixed at the component level as they're found. This just
+     guarantees a stray one never produces a page-level horizontal
+     scrollbar — vertical scrolling is untouched. */
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
+    width: 100%;
   }
 
   /* tw-animate-css's animate-in/animate-out utilities never set

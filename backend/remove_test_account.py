@@ -14,7 +14,7 @@ else:
     user_id = match[0]["_id"]
     data["users"] = [u for u in users if u.get("email") != target_email]
     removed_related = 0
-    for coll in ("datasets", "models", "data_sources", "reports"):
+    for coll in ("datasets", "models", "reports"):
         items = data.get(coll, [])
         before = len(items)
         data[coll] = [d for d in items if d.get("user_id") != user_id]

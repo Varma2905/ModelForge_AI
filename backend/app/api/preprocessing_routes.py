@@ -1,12 +1,11 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
-import pandas as pd
 from app.auth.dependencies import get_current_user
-from app.database.mongodb import db_client
+from app.datasets import store
 from app.ml.preprocessing import preprocess_dataframe
 from app.utils.response import ok
-from bson import ObjectId
 
 router = APIRouter(prefix="", tags=["Data Preprocessing"])
 
@@ -29,7 +28,7 @@ async def preprocess_dataset(
     request: PreprocessRequest, current_user: dict = Depends(get_current_user)
 ):
     # Fetch the original dataset, scoped to the current user
-    dataset = await db_client.find_one("datasets", {"_id": request.dataset_id})
+    dataset = store.load_meta(request.dataset_id)
     if not dataset or dataset.get("user_id") != current_user["_id"]:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -37,8 +36,7 @@ async def preprocess_dataset(
         )
 
     try:
-        # Load dataset into pandas DataFrame
-        df = pd.DataFrame(dataset["rows"], columns=dataset["columns"])
+        df = await asyncio.to_thread(store.load_dataframe, request.dataset_id)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -55,31 +53,21 @@ async def preprocess_dataset(
             detail=f"Preprocessing execution failed: {str(e)}"
         )
 
-    # Prepare details of new dataset
-    column_names = processed_df.columns.tolist()
-    data_types = {col: str(dtype) for col, dtype in zip(processed_df.columns, processed_df.dtypes)}
-    row_count = len(processed_df)
-    col_count = len(column_names)
-
-    # Convert NaN to None for JSON compliance
-    cleaned_rows = processed_df.where(pd.notnull(processed_df), None).values.tolist()
-
-    preprocessed_doc = {
-        "_id": str(ObjectId()),
+    # Parquet stores NaN natively (unlike JSON), so processed_df is saved
+    # as-is — no None-conversion needed here, only at API-response boundaries.
+    preprocessed_meta = {
         "user_id": current_user["_id"],
         "name": f"preprocessed_{dataset['name']}",
-        "columns": column_names,
-        "rows": cleaned_rows,
-        "data_types": data_types,
-        "row_count": row_count,
-        "col_count": col_count,
-        "missing_values": int(processed_df.isna().sum().sum()),
         "is_preprocessed": True,
         "original_dataset_id": request.dataset_id,
-        "preprocessing_config": config_dict
+        "preprocessing_config": config_dict,
+        # Lineage carried forward from the original dataset rather than
+        # re-derived, so a preprocessed Kaggle/Drive dataset still reports
+        # its true origin.
+        "source": dataset.get("source", "local"),
     }
 
-    preprocessed_dataset_id = await db_client.insert_one("datasets", preprocessed_doc)
+    preprocessed_dataset_id = await asyncio.to_thread(store.save, processed_df, preprocessed_meta)
 
     return ok({
         "preprocessed_dataset_id": preprocessed_dataset_id,

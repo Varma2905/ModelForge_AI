@@ -15,6 +15,8 @@ import { Loader2 } from "lucide-react";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { AnalysisProvider } from "@/lib/analysis-store";
+import { ClassificationAnalysisProvider } from "@/lib/classification-analysis-store";
+import { ClusteringAnalysisProvider } from "@/lib/clustering-analysis-store";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -22,7 +24,39 @@ import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider, themeInitScript } from "@/lib/theme";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "@/components/user-menu";
-import { CommandMenuProvider, CommandMenuTrigger } from "@/components/command-menu";
+import { CommandMenuProvider, useCommandMenu } from "@/components/command-menu";
+import { NewAnalysisModalProvider } from "@/components/new-analysis-modal";
+import { NotificationsBell } from "@/components/notifications-bell";
+import { Button } from "@/components/ui/button";
+import { Search } from "lucide-react";
+
+function HeaderSearch() {
+  const { setOpen } = useCommandMenu();
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="hidden sm:flex items-center gap-2 w-full max-w-sm rounded-lg border border-input bg-muted/40 px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted/70 transition-colors"
+      >
+        <Search className="h-3.5 w-3.5 flex-shrink-0" />
+        <span className="flex-1 text-left truncate">Search datasets, analyses, reports…</span>
+        <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border bg-background px-1.5 font-mono text-[10px] text-muted-foreground">
+          ⌘K
+        </kbd>
+      </button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="sm:hidden"
+        aria-label="Search"
+        onClick={() => setOpen(true)}
+      >
+        <Search className="h-4 w-4" />
+      </Button>
+    </>
+  );
+}
 
 function NotFoundComponent() {
   return (
@@ -89,13 +123,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "AI Regression Studio — Automated Regression with Agentic AI" },
+      { title: "ModelForge AI Studio — Automated Regression with Agentic AI" },
       {
         name: "description",
         content:
           "Upload data, train regression models, visualize performance, and get AI-generated explanations and PDF reports.",
       },
-      { property: "og:title", content: "AI Regression Studio" },
+      { property: "og:title", content: "ModelForge AI Studio" },
       {
         property: "og:description",
         content: "Automated regression analysis with agentic AI insights.",
@@ -137,7 +171,11 @@ function RootComponent() {
       <ThemeProvider>
         <AuthProvider>
           <AnalysisProvider>
-            <AppShell />
+            <ClassificationAnalysisProvider>
+              <ClusteringAnalysisProvider>
+                <AppShell />
+              </ClusteringAnalysisProvider>
+            </ClassificationAnalysisProvider>
           </AnalysisProvider>
         </AuthProvider>
       </ThemeProvider>
@@ -189,31 +227,33 @@ function AppShell() {
 
   return (
     <CommandMenuProvider>
-      <SidebarProvider>
-        <div className="min-h-screen flex w-full bg-background">
-          <AppSidebar />
-          <div className="flex-1 flex flex-col min-w-0">
-            <header className="h-14 border-b border-border flex items-center gap-3 px-4 sticky top-0 bg-background/80 backdrop-blur z-10">
-              <SidebarTrigger />
-              <div className="text-sm font-medium">AI Regression Studio</div>
-              <div className="ml-auto flex items-center gap-1">
-                <CommandMenuTrigger />
-                <ThemeToggle />
-                <span className="hidden sm:inline text-xs text-muted-foreground mx-1">
-                  Agentic AI · v1.0
-                </span>
-                <UserMenu variant="topbar" />
-              </div>
-            </header>
-            <main className="flex-1 p-6">
-              <div key={pathname} className="page-enter">
-                <Outlet />
-              </div>
-            </main>
+      <NewAnalysisModalProvider>
+        <SidebarProvider>
+          <div className="min-h-screen flex w-full bg-background">
+            <AppSidebar />
+            <div className="flex-1 flex flex-col min-w-0">
+              <header className="h-14 border-b border-border flex items-center gap-3 px-4 sticky top-0 bg-background/80 backdrop-blur z-10">
+                <SidebarTrigger />
+                <HeaderSearch />
+                <div className="ml-auto flex items-center gap-1">
+                  <ThemeToggle />
+                  <NotificationsBell />
+                  <span className="hidden sm:inline text-xs text-muted-foreground mx-1">
+                    Agentic AI · v1.0
+                  </span>
+                  <UserMenu variant="topbar" />
+                </div>
+              </header>
+              <main className="flex-1 p-6">
+                <div key={pathname} className="page-enter">
+                  <Outlet />
+                </div>
+              </main>
+            </div>
           </div>
-        </div>
-        <Toaster richColors position="top-right" />
-      </SidebarProvider>
+          <Toaster richColors position="top-right" />
+        </SidebarProvider>
+      </NewAnalysisModalProvider>
     </CommandMenuProvider>
   );
 }

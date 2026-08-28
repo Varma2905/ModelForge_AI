@@ -1,23 +1,25 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Sparkles,
-  Plus,
-  Trash2,
-  MessageSquare,
-  Eraser,
-  Database,
-  ArrowRight,
-} from "lucide-react";
+import { Sparkles, Plus, Trash2, MessageSquare, Eraser, FileText } from "lucide-react";
+import { toast } from "sonner";
 import { AiChatPanel } from "@/components/ai-chat-panel";
 import { GradientIcon } from "@/components/gradient-icon";
+import { ReportSelectorPanel } from "@/components/report-selector-panel";
 import { useAiChat } from "@/hooks/use-ai-chat";
-import { useModelMetrics } from "@/hooks/use-training";
-import { api } from "@/lib/api-service";
+import { useModelsList } from "@/hooks/use-training";
 import { requireAuth } from "@/lib/require-auth";
+import {
+  REPORT_TYPE_META,
+  SUGGESTIONS_BY_TYPE,
+  PLACEHOLDER_BY_TYPE,
+  GENERAL_SUGGESTIONS,
+  GENERAL_PLACEHOLDER,
+  reportType,
+  reportTitle,
+} from "@/lib/report-display";
 
 type AssistantSearch = { prefill?: string };
 
@@ -29,39 +31,35 @@ export const Route = createFileRoute("/assistant")({
   component: AssistantPage,
 });
 
-const SUGGESTIONS = [
-  "Which regression model should I choose?",
-  "How do I interpret my R² score?",
-  "What is overfitting and how do I fix it?",
-  "When should I use Ridge vs Lasso?",
-  "Why is my model performing badly?",
-  "How can I improve this model?",
-];
-
 function AssistantPage() {
   const { prefill } = Route.useSearch();
-  const [contextModelId, setContextModelId] = useState<string | null>(null);
+  const reportsQuery = useModelsList();
+  const chat = useAiChat({ persistKey: "assistant" });
+  const reportPanelRef = useRef<HTMLDivElement>(null);
 
+  const reports = reportsQuery.data ?? [];
+  const selectedReportId = chat.activeConversation.reportId;
+  const selectedReport = reports.find((r) => r.model_id === selectedReportId) ?? null;
+
+  // If the report a conversation was analyzing has since been deleted from
+  // the Reports page, clear it safely instead of silently sending a dead
+  // model_id (or crashing on stale data).
   useEffect(() => {
-    let cancelled = false;
-    api
-      .listModels()
-      .then((models) => {
-        if (cancelled || models.length === 0) return;
-        setContextModelId(models[0].model_id);
-      })
-      .catch(() => {
-        // No trained models yet, or request failed — chat still works, just without context.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (reportsQuery.isLoading || reportsQuery.isError || !selectedReportId) return;
+    const stillExists = reports.some((r) => r.model_id === selectedReportId);
+    if (!stillExists) {
+      chat.setConversationReport(chat.activeId, null);
+      toast.error("The selected report is no longer available. Please select another report.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportsQuery.isLoading, reportsQuery.isError, selectedReportId, chat.activeId]);
 
-  const chat = useAiChat({ persistKey: "assistant", contextModelId });
-  const contextQuery = useModelMetrics(contextModelId);
-  const context = contextQuery.data;
-  const contextLabel = context ? `${context.model}` : null;
+  const type = selectedReport ? reportType(selectedReport) : null;
+  const meta = type ? REPORT_TYPE_META[type] : null;
+  // Real-time mode (no report selected) still works — it just gets no
+  // report context, per the Real-Time vs Report-Based Conversation modes.
+  const suggestions = type ? SUGGESTIONS_BY_TYPE[type] : GENERAL_SUGGESTIONS;
+  const placeholder = type ? PLACEHOLDER_BY_TYPE[type] : GENERAL_PLACEHOLDER;
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">
@@ -70,12 +68,15 @@ function AssistantPage() {
           <Sparkles className="h-5 w-5 text-primary" /> AI Assistant
         </h1>
         <p className="text-sm text-muted-foreground">
-          Get expert help with regression analysis, model selection, and result interpretation.
+          Get expert help with your regression, classification, and clustering analysis.
+        </p>
+        <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+          Powered by Hugging Face · Qwen2.5-7B-Instruct
         </p>
       </div>
 
       <Card
-        className="grid grid-cols-1 md:grid-cols-[220px_1fr] lg:grid-cols-[220px_1fr_260px] overflow-hidden"
+        className="grid grid-cols-1 md:grid-cols-[220px_1fr] lg:grid-cols-[220px_1fr_280px] overflow-hidden"
         style={{ height: "72vh" }}
       >
         {/* Conversation list */}
@@ -123,12 +124,17 @@ function AssistantPage() {
         {/* Active conversation */}
         <div className="flex flex-col min-h-0">
           <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5">
-            <div className="min-w-0">
+            <div className="min-w-0 space-y-1">
               <p className="text-sm font-medium truncate">{chat.activeConversation.title}</p>
-              {contextLabel && (
-                <p className="text-[11px] text-muted-foreground flex items-center gap-1 truncate">
-                  <Database className="h-3 w-3 flex-shrink-0" /> Context: {contextLabel}
-                </p>
+              {selectedReport && meta ? (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] text-muted-foreground">Analyzing:</span>
+                  <Badge className={`${meta.badgeBg} ${meta.text} border-none text-[11px] font-normal gap-1 px-1.5`}>
+                    <meta.icon className="h-3 w-3" /> {reportTitle(selectedReport)}
+                  </Badge>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">Real-time chat — select a report to begin an analysis conversation</p>
               )}
             </div>
             <Button
@@ -147,82 +153,51 @@ function AssistantPage() {
             onStop={chat.stop}
             sending={chat.sending}
             streaming={chat.streaming}
-            placeholder="Ask me anything about your regression analysis…"
-            suggestions={SUGGESTIONS}
+            placeholder={placeholder}
+            suggestions={suggestions}
             initialInput={prefill}
+            compact
             emptyState={
-              <div className="h-full flex flex-col items-center justify-center text-center gap-2 py-10">
-                <GradientIcon icon={Sparkles} shape="circle" size="lg" className="mb-1" />
-                <p className="font-medium">Start a conversation</p>
-                <p className="text-sm text-muted-foreground max-w-xs">
-                  Ask anything about your regression analysis — model selection, R², RMSE, p-values, or how to
-                  improve your results.
-                </p>
-              </div>
+              selectedReport ? (
+                <div className="h-full flex flex-col items-center justify-center text-center gap-2 py-10">
+                  <GradientIcon icon={Sparkles} shape="circle" size="lg" className="mb-1" />
+                  <p className="font-medium">Start a conversation</p>
+                  <p className="text-sm text-muted-foreground max-w-xs">
+                    Ask anything about {reportTitle(selectedReport).toLowerCase()} — metrics, results, or how to
+                    improve them.
+                  </p>
+                </div>
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-center gap-2 py-10">
+                  <GradientIcon icon={FileText} shape="circle" size="lg" className="mb-1" />
+                  <p className="font-medium">Select a Report</p>
+                  <p className="text-sm text-muted-foreground max-w-xs">
+                    Choose a generated report from the panel for report-specific analysis, or ask a general machine
+                    learning question below.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-1"
+                    onClick={() => reportPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })}
+                  >
+                    Select Report
+                  </Button>
+                </div>
+              )
             }
           />
         </div>
 
-        {/* Context panel */}
-        <div className="hidden lg:flex flex-col border-l min-h-0 overflow-y-auto">
-          <div className="p-4 border-b">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Current Context
-            </p>
-          </div>
-          {contextQuery.isLoading ? (
-            <div className="p-4 text-xs text-muted-foreground">Loading…</div>
-          ) : context ? (
-            <div className="p-4 space-y-4">
-              <div>
-                <p className="text-xs text-muted-foreground">Model</p>
-                <p className="text-sm font-medium">{context.model}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Target</p>
-                <p className="text-sm font-medium">{context.target}</p>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <p className="text-[10px] text-muted-foreground">R²</p>
-                  <Badge variant="secondary" className="mt-0.5">
-                    {context.metrics.R2.toFixed(3)}
-                  </Badge>
-                </div>
-                <div>
-                  <p className="text-[10px] text-muted-foreground">RMSE</p>
-                  <Badge variant="secondary" className="mt-0.5">
-                    {context.metrics.RMSE.toFixed(2)}
-                  </Badge>
-                </div>
-                <div>
-                  <p className="text-[10px] text-muted-foreground">MAE</p>
-                  <Badge variant="secondary" className="mt-0.5">
-                    {context.metrics.MAE.toFixed(2)}
-                  </Badge>
-                </div>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground mb-1.5">Features</p>
-                <div className="flex flex-wrap gap-1">
-                  {context.features.map((f) => (
-                    <Badge key={f} variant="outline" className="text-[10px] font-normal">
-                      {f}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-              <Button asChild size="sm" variant="outline" className="w-full">
-                <Link to="/models/$modelId" params={{ modelId: context.model_id }}>
-                  View full details <ArrowRight className="ml-1.5 h-3 w-3" />
-                </Link>
-              </Button>
-            </div>
-          ) : (
-            <div className="p-4 text-xs text-muted-foreground">
-              Train a model to see its context here — R², RMSE, MAE, and features.
-            </div>
-          )}
+        {/* Generated Reports panel */}
+        <div ref={reportPanelRef} className="hidden lg:flex flex-col border-l min-h-0">
+          <ReportSelectorPanel
+            reports={reports}
+            isLoading={reportsQuery.isLoading}
+            isError={reportsQuery.isError}
+            selectedReportId={selectedReportId}
+            onSelect={(id) => chat.setConversationReport(chat.activeId, id)}
+          />
         </div>
       </Card>
     </div>

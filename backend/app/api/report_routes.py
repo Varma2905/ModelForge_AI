@@ -9,9 +9,11 @@ from app.database.mongodb import db_client
 from app.datasets import store as dataset_store
 from app.reports.pdf_generator import build_pdf_report
 from app.reports.dataset_profile import build_dataset_profile
+from app.reports.report_validation import validate_report
 from app.api.ai_routes import run_ai_explanation_pipeline
 from app.api.training_routes import ensure_graphs
 from app.utils.response import ok
+from app.utils.perf import PerfTimer
 
 logger = logging.getLogger("regression_studio.report_routes")
 
@@ -75,14 +77,30 @@ async def download_report(model_id: str, current_user: dict = Depends(get_curren
     # 1. Fetch model document, scoped to the current user
     model_doc = await _get_owned_model(model_id, current_user["_id"])
 
-    # 2. Check if AI explanation exists. If not, generate it now.
-    ai_report_markdown = model_doc.get("ai_explanation")
-    if not ai_report_markdown:
+    output_pdf_path = os.path.join(STATIC_REPORTS_DIR, f"report_{model_id}.pdf")
+
+    # A model_id is created once at training time and never mutated
+    # afterward (retraining always produces a new model_id), and
+    # delete_model() already removes this exact file — so a previously
+    # generated PDF is always still correct to serve as-is: reuse it
+    # outright instead of reloading the dataset, re-profiling it,
+    # re-running/re-checking the AI pipeline, and re-rendering the PDF.
+    if os.path.exists(output_pdf_path):
+        return FileResponse(
+            path=output_pdf_path,
+            filename=f"regression_report_{model_id}.pdf",
+            media_type="application/pdf"
+        )
+
+    perf = PerfTimer(f"report ({model_id})")
+
+    # 2. Get the AI explanation (cached after the first call for this model —
+    # see run_ai_explanation_pipeline's own cache check).
+    with perf.stage("ai_explanation"):
         try:
-            logger.info("AI explanation missing. Generating it before creating report...")
             ai_data = await run_ai_explanation_pipeline(model_id, current_user["_id"])
             ai_report_markdown = ai_data["full_report"]
-            # Reload model doc to get updated fields
+            # Reload model doc in case the pipeline just wrote ai_explanation.
             model_doc = await db_client.find_one("models", {"_id": model_id})
         except Exception as e:
             ai_report_markdown = f"# MODELFORGE AI STUDIO EXECUTIVE REPORT\n\nFailed to run AI Agent pipeline: {e}"
@@ -99,33 +117,55 @@ async def download_report(model_id: str, current_user: dict = Depends(get_curren
     # Best-effort: a failure here (e.g. the source dataset was since
     # deleted) degrades to those two sections being omitted rather than
     # failing the whole report — see pdf_generator.py's `if dataset_profile:` guard.
-    try:
-        report_df = await asyncio.to_thread(dataset_store.load_dataframe, model_doc.get("dataset_id"))
-        model_info["dataset_profile"] = build_dataset_profile(report_df, model_doc.get("target"))
-    except Exception as e:
-        logger.warning(f"Dataset profiling failed for report on model {model_id}: {e}")
+    # Loaded once here and handed to ensure_graphs() below (3.5) instead of
+    # letting each independently reload the same dataframe from disk.
+    report_df = None
+    with perf.stage("dataset_load + profile"):
+        try:
+            report_df = await asyncio.to_thread(dataset_store.load_dataframe, model_doc.get("dataset_id"))
+            model_info["dataset_profile"] = build_dataset_profile(report_df, model_doc.get("target"))
+        except Exception as e:
+            logger.warning(f"Dataset profiling failed for report on model {model_id}: {e}")
+
+    # 3.6 Structured consistency validation — the backend is the single
+    # source of truth for every metric/count in the report, so a report
+    # whose underlying data is internally inconsistent (missing metrics,
+    # mismatched feature/row counts, wrong model_type) must not be silently
+    # rendered. Error-severity issues abort with a structured 422; warning-
+    # severity issues are attached to model_info and rendered as a Data
+    # Quality Notices panel in the PDF instead (see pdf_generator.py).
+    with perf.stage("report_validation"):
+        validation_issues = validate_report(model_info)
+        validation_errors = [i for i in validation_issues if i["severity"] == "error"]
+        if validation_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Report data failed consistency validation.", "issues": validation_errors},
+            )
+        model_info["validation_issues"] = validation_issues
 
     # 3.5 Generate the PNG diagnostic charts now if training didn't (it no
-    # longer does, by default — see training_routes.ensure_graphs).
-    graph_paths = await ensure_graphs(model_doc)
-
-    # 4. Define output path for the PDF
-    output_pdf_path = os.path.join(STATIC_REPORTS_DIR, f"report_{model_id}.pdf")
+    # longer does, by default — see training_routes.ensure_graphs). Hands
+    # over the dataframe already loaded above (when available) so this
+    # doesn't load it a second time.
+    with perf.stage("ensure_graphs"):
+        graph_paths = await ensure_graphs(model_doc, preloaded_df=report_df)
 
     # 5. Generate the PDF
-    try:
-        build_pdf_report(
-            model_id=model_id,
-            model_info=model_info,
-            graph_paths=graph_paths,
-            ai_report_markdown=ai_report_markdown,
-            output_pdf_path=output_pdf_path
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate PDF document: {str(e)}"
-        )
+    with perf.stage("pdf_render"):
+        try:
+            build_pdf_report(
+                model_id=model_id,
+                model_info=model_info,
+                graph_paths=graph_paths,
+                ai_report_markdown=ai_report_markdown,
+                output_pdf_path=output_pdf_path
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to generate PDF document: {str(e)}"
+            )
 
     if not os.path.exists(output_pdf_path):
         raise HTTPException(
@@ -133,6 +173,7 @@ async def download_report(model_id: str, current_user: dict = Depends(get_curren
             detail="PDF generation completed but file was not written."
         )
 
+    perf.report()
     return FileResponse(
         path=output_pdf_path,
         filename=f"regression_report_{model_id}.pdf",

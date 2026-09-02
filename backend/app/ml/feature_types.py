@@ -84,6 +84,183 @@ def _is_likely_identifier(col_name: str, series: pd.Series, kind: str) -> bool:
     return False
 
 
+def detect_identifier_target(target: str, kind_by_col: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    """Warns (never blocks) when the user-selected target column itself looks
+    like an identifier (customer_id, transaction_id, ...) rather than a
+    meaningful label/value to predict. The target stays user-authoritative —
+    this only surfaces a warning string for the caller to add to its
+    existing `warnings` list, mirroring how `is_identifier`/`high_cardinality`
+    are already surfaced for FEATURES (see cluster_routes.py select_features)."""
+    info = kind_by_col.get(target)
+    if info and info.get("is_identifier"):
+        return (
+            f"'{target}' appears to be an identifier column (e.g. a row ID or code) rather than "
+            "a meaningful target variable. Consider selecting a semantic target variable."
+        )
+    return None
+
+
+# A feature name is treated as target-derived if the normalized target name
+# appears in it as a whole "word" (underscore/boundary-delimited) — e.g.
+# target "selling_value" flags "selling_value_usd" or "final_selling_value",
+# but not an unrelated column that merely shares a short substring.
+def _normalize_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+
+
+_LEAKAGE_CORRELATION_THRESHOLD = 0.98
+
+
+def detect_target_leakage(
+    df: pd.DataFrame,
+    target: str,
+    features: List[str],
+    kind_by_col: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    """Warns (never blocks) when a selected feature is likely a near-duplicate
+    or derivative of the target — e.g. target "selling_value" with a feature
+    "selling_value - purchase_value" or a near-perfectly-correlated numeric
+    column. Two independent checks, either one is sufficient to flag:
+
+    1. Name pattern: the normalized target name appears as a whole segment
+       inside the normalized feature name (or vice versa).
+    2. Correlation: for a numeric target + numeric feature, an absolute
+       Pearson correlation above `_LEAKAGE_CORRELATION_THRESHOLD` — a
+       genuinely useful predictor is rarely THIS close to the target itself.
+
+    Returns a list of {"feature", "reason", "detail"} dicts, one per flagged
+    feature (name-pattern is checked first; a feature already flagged by
+    name isn't re-flagged for correlation too).
+    """
+    warnings: List[Dict[str, str]] = []
+    target_norm = _normalize_name(target)
+    if not target_norm:
+        return warnings
+
+    flagged: set = set()
+    for feat in features:
+        feat_norm = _normalize_name(feat)
+        if not feat_norm or feat_norm == target_norm:
+            continue
+        feat_segments = feat_norm.split("_")
+        target_segments = target_norm.split("_")
+        name_match = (
+            target_norm in feat_segments
+            or feat_norm in target_segments
+            or feat_norm.startswith(target_norm + "_")
+            or feat_norm.endswith("_" + target_norm)
+            or target_norm.startswith(feat_norm + "_")
+            or target_norm.endswith("_" + feat_norm)
+        )
+        if name_match:
+            warnings.append({
+                "feature": feat,
+                "reason": "name_pattern",
+                "detail": (
+                    f"'{feat}' looks like it may be derived from the target '{target}' based on its name. "
+                    "Using target-derived features can cause the model to appear artificially accurate "
+                    "(target leakage). Consider excluding it."
+                ),
+            })
+            flagged.add(feat)
+
+    target_info = kind_by_col.get(target)
+    if target_info and target_info.get("kind") == "numerical":
+        for feat in features:
+            if feat in flagged:
+                continue
+            feat_info = kind_by_col.get(feat)
+            if not feat_info or feat_info.get("kind") != "numerical":
+                continue
+            try:
+                corr = df[feat].corr(df[target])
+            except Exception:
+                continue
+            if corr is None or pd.isna(corr):
+                continue
+            if abs(corr) > _LEAKAGE_CORRELATION_THRESHOLD:
+                warnings.append({
+                    "feature": feat,
+                    "reason": "high_correlation",
+                    "detail": (
+                        f"'{feat}' is correlated with the target '{target}' at |r| = {abs(corr):.3f}, "
+                        "which is unusually high and may indicate target leakage rather than a genuinely "
+                        "predictive relationship. Consider excluding it."
+                    ),
+                })
+                flagged.add(feat)
+
+    return warnings
+
+
+def _is_linear_regression_model(model_name: str) -> bool:
+    """Matches the same OLS-family name variants get_regression_model()
+    accepts (app/ml/regression_models.py) — used to gate whether the
+    auxiliary OLS coefficient table needs a disclaimer (it doesn't, when the
+    actual trained model IS an OLS fit)."""
+    name_clean = (model_name or "").replace(" ", "").lower()
+    return name_clean in ("linearregression", "linear", "multiplelinear", "multiplelinearregression")
+
+
+def _is_logistic_regression_model(model_name: str) -> bool:
+    """Classification counterpart to _is_linear_regression_model — matches
+    the name variants get_classification_model() accepts for Logistic
+    Regression (app/ml/classification_models.py)."""
+    name_clean = (model_name or "").replace(" ", "").lower()
+    return name_clean in ("logisticregression", "logistic")
+
+
+def extract_feature_importance(
+    model_instance: Any,
+    feature_names_out: List[str],
+    numeric_features: List[str],
+    categorical_features: List[str],
+    encoded_categorical_names: List[str],
+) -> Optional[Dict[str, List[Any]]]:
+    """Native feature importance from the model actually trained — tree
+    ensembles' `feature_importances_` (impurity/gain-based) or linear
+    models' `coef_` (magnitude). Returns None for models with neither
+    attribute (KNN, Gaussian Naive Bayes, an SVM/SVR without a linear
+    kernel), so callers can report that truthfully instead of substituting a
+    proxy value. Model-agnostic — works identically for regression and
+    classification estimators, so it's shared here rather than living in
+    classification_evaluation.py (which re-exports it for backward
+    compatibility with existing imports)."""
+    if hasattr(model_instance, "feature_importances_"):
+        raw_values = np.asarray(model_instance.feature_importances_, dtype=float)
+    elif hasattr(model_instance, "coef_"):
+        coef = np.asarray(model_instance.coef_, dtype=float)
+        # coef_ is (n_features,) for a plain/binary fit, or (n_classes,
+        # n_features) for multiclass classification (one row per class) —
+        # collapse to a single per-feature magnitude by averaging absolute
+        # values across classes, matching how the chart displays a single
+        # bar per feature.
+        raw_values = np.mean(np.abs(coef), axis=0) if coef.ndim == 2 else np.abs(coef)
+    else:
+        return None
+
+    if len(raw_values) != len(feature_names_out):
+        # Defensive: shouldn't happen for any currently supported model, but
+        # a mismatch here means the attribute doesn't actually correspond
+        # 1:1 to the preprocessor's output columns — safer to report
+        # "unavailable" than zip mismatched arrays and mis-attribute values.
+        logger.warning(
+            f"Feature importance length mismatch: {len(raw_values)} values for "
+            f"{len(feature_names_out)} feature columns. Skipping."
+        )
+        return None
+
+    raw = {name: float(v) for name, v in zip(feature_names_out, raw_values)}
+    mapped = map_expanded_coefficients(raw, numeric_features, categorical_features, encoded_categorical_names)
+    mapped = [e for e in mapped if e["value"] is not None]
+    mapped.sort(key=lambda e: abs(e["value"]), reverse=True)
+
+    return {
+        "features": [e["feature"] for e in mapped],
+        "importance": [e["value"] for e in mapped],
+    }
+
+
 def classify_columns(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     """Classifies every column as "numerical", "categorical", or "datetime".
 

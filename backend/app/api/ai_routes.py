@@ -24,6 +24,7 @@ from app.agents.classification_recommendation_agent import ClassificationRecomme
 from app.agents.clustering_explanation_agent import ClusteringInterpretationAgent
 from app.agents.report_agent import ReportAgent
 from app.utils.response import ok
+from app.utils.perf import PerfTimer
 
 logger = logging.getLogger("regression_studio.ai_routes")
 
@@ -52,6 +53,11 @@ class ChatResponse(BaseModel):
 
 class AIExplainRequest(BaseModel):
     model_id: str
+    # Additive/backward-compatible: existing callers that never send this
+    # field keep getting the cached result (see run_ai_explanation_pipeline)
+    # instead of re-running the LLM pipeline. Only an explicit force=True
+    # bypasses the cache and regenerates.
+    force: bool = False
 
 class AIExplainResponse(BaseModel):
     summary: str
@@ -75,6 +81,8 @@ async def _run_clustering_explanation_pipeline(model_doc: Dict[str, Any], user_i
             detail=f"Dataset with ID {model_doc['dataset_id']} referencing model was not found."
         )
 
+    perf = PerfTimer(f"ai-explain-clustering ({model_id})")
+
     dataset_agent = DatasetAnalysisAgent()
     ml_agent = MLModelExplanationAgent()
     clustering_agent = ClusteringInterpretationAgent()
@@ -87,18 +95,19 @@ async def _run_clustering_explanation_pipeline(model_doc: Dict[str, Any], user_i
         "data_types": dataset_doc["data_types"],
     }
 
-    dataset_analysis, model_explanation, clustering_explanation = await asyncio.gather(
-        dataset_agent.analyze(df_summary),
-        ml_agent.explain(model_doc["model"], model_doc.get("hyperparameters"), model_type="clustering"),
-        clustering_agent.explain(
-            model_name=model_doc["model"],
-            metrics=model_doc["metrics"],
-            cluster_sizes=model_doc.get("cluster_sizes", {}),
-            cluster_profiles=model_doc.get("cluster_profiles", []),
-            features=model_doc["features"],
-            total_rows=model_doc.get("total_rows", 0),
-        ),
-    )
+    with perf.stage("agents_gather"):
+        dataset_analysis, model_explanation, clustering_explanation = await asyncio.gather(
+            dataset_agent.analyze(df_summary),
+            ml_agent.explain(model_doc["model"], model_doc.get("hyperparameters"), model_type="clustering"),
+            clustering_agent.explain(
+                model_name=model_doc["model"],
+                metrics=model_doc["metrics"],
+                cluster_sizes=model_doc.get("cluster_sizes", {}),
+                cluster_profiles=model_doc.get("cluster_profiles", []),
+                features=model_doc["features"],
+                total_rows=model_doc.get("total_rows", 0),
+            ),
+        )
 
     metrics = model_doc["metrics"]
     silhouette = metrics.get("Silhouette")
@@ -149,23 +158,29 @@ This document provides a comprehensive report of the unsupervised clustering ana
         ]
     insights = insights[:4]
 
-    await db_client.update_one("models", {"_id": model_id}, {"$set": {"ai_explanation": full_report}})
+    with perf.stage("persist"):
+        await db_client.update_one("models", {"_id": model_id}, {"$set": {"ai_explanation": full_report}})
 
-    report_doc = {
-        "_id": f"rep_{model_id}",
-        "user_id": user_id,
-        "model_id": model_id,
-        "summary": summary_text,
-        "insights": insights,
-        "full_report": full_report,
-        "created_at": pd.Timestamp.now().isoformat(),
-    }
-    await db_client.insert_one("reports", report_doc)
+        report_doc = {
+            "_id": f"rep_{model_id}",
+            "user_id": user_id,
+            "model_id": model_id,
+            "summary": summary_text,
+            "insights": insights,
+            "full_report": full_report,
+            "created_at": pd.Timestamp.now().isoformat(),
+        }
+        # Delete-then-insert rather than upsert — keeps this correct whether
+        # a prior report_doc exists (regeneration) or not, regardless of
+        # whether db_client is backed by real Mongo or the JSON fallback.
+        await db_client.delete_one("reports", {"_id": f"rep_{model_id}"})
+        await db_client.insert_one("reports", report_doc)
 
+    perf.report()
     return {"summary": summary_text, "insights": insights, "full_report": full_report}
 
 
-async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, Any]:
+async def run_ai_explanation_pipeline(model_id: str, user_id: str, force: bool = False) -> Dict[str, Any]:
     # 1. Fetch model document, scoped to the requesting user
     model_doc = await db_client.find_one("models", {"_id": model_id})
     if not model_doc or model_doc.get("user_id") != user_id:
@@ -174,8 +189,26 @@ async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, 
             detail=f"Model with ID {model_id} not found."
         )
 
+    # The AI Insights pipeline is 4-5 LLM round-trips (see the asyncio.gather
+    # calls below and ReportAgent's executive-summary rewrite) — expensive
+    # and, for a given model_id, always produces the same input (a trained
+    # model's results never change in place; retraining gets a new
+    # model_id). Once generated, reuse it from the "reports" collection
+    # instead of re-running the whole pipeline on every page visit/refresh —
+    # only an explicit force=True (POST /ai/explain only) bypasses this.
+    if not force:
+        cached_report = await db_client.find_one("reports", {"_id": f"rep_{model_id}"})
+        if cached_report:
+            return {
+                "summary": cached_report["summary"],
+                "insights": cached_report["insights"],
+                "full_report": cached_report["full_report"],
+            }
+
     if model_doc.get("model_type") == "clustering":
         return await _run_clustering_explanation_pipeline(model_doc, user_id)
+
+    perf = PerfTimer(f"ai-explain ({model_id})")
 
     # 2. Fetch dataset document
     dataset_doc = dataset_store.load_meta(model_doc["dataset_id"])
@@ -211,39 +244,43 @@ async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, 
     # consumes another's output), so run them concurrently instead of
     # awaiting them one-by-one — each is its own LLM round-trip, and doing
     # them sequentially was the main reason this pipeline felt slow.
-    dataset_analysis, model_explanation, stats_explanation, recommendations = await asyncio.gather(
-        dataset_agent.analyze(df_summary),
-        ml_agent.explain(model_doc["model"], model_doc.get("hyperparameters"), model_type=model_doc.get("model_type", "regression")),
-        explanation_agent.explain(
-            metrics=model_doc["metrics"],
-            stats=model_doc["statistical_analysis"],
-            features=model_doc["features"],
-            numeric_features=model_doc.get("numerical_features", model_doc["features"]),
-            categorical_features=model_doc.get("categorical_features", []),
-            target=model_doc["target"]
-        ),
-        rec_agent.recommend(
+    with perf.stage("agents_gather"):
+        dataset_analysis, model_explanation, stats_explanation, recommendations = await asyncio.gather(
+            dataset_agent.analyze(df_summary),
+            ml_agent.explain(model_doc["model"], model_doc.get("hyperparameters"), model_type=model_doc.get("model_type", "regression")),
+            explanation_agent.explain(
+                metrics=model_doc["metrics"],
+                stats=model_doc["statistical_analysis"],
+                features=model_doc["features"],
+                numeric_features=model_doc.get("numerical_features", model_doc["features"]),
+                categorical_features=model_doc.get("categorical_features", []),
+                target=model_doc["target"],
+                model_name=model_doc["model"],
+            ),
+            rec_agent.recommend(
+                model_name=model_doc["model"],
+                metrics=model_doc["metrics"],
+                stats=model_doc["statistical_analysis"],
+                features=model_doc["features"],
+                numeric_features=model_doc.get("numerical_features", model_doc["features"]),
+                categorical_features=model_doc.get("categorical_features", []),
+                target=model_doc["target"]
+            ),
+        )
+
+    # Combine into full report (this itself makes one more, sequential LLM
+    # call to rewrite the executive summary — see ReportAgent.generate_full_report)
+    with perf.stage("report_compile"):
+        full_report = await report_agent.generate_full_report(
+            dataset_name=dataset_doc["name"],
             model_name=model_doc["model"],
             metrics=model_doc["metrics"],
-            stats=model_doc["statistical_analysis"],
-            features=model_doc["features"],
-            numeric_features=model_doc.get("numerical_features", model_doc["features"]),
-            categorical_features=model_doc.get("categorical_features", []),
-            target=model_doc["target"]
-        ),
-    )
-
-    # Combine into full report
-    full_report = await report_agent.generate_full_report(
-        dataset_name=dataset_doc["name"],
-        model_name=model_doc["model"],
-        metrics=model_doc["metrics"],
-        dataset_analysis=dataset_analysis,
-        model_explanation=model_explanation,
-        stats_explanation=stats_explanation,
-        recommendations=recommendations,
-        model_type=model_doc.get("model_type", "regression"),
-    )
+            dataset_analysis=dataset_analysis,
+            model_explanation=model_explanation,
+            stats_explanation=stats_explanation,
+            recommendations=recommendations,
+            model_type=model_doc.get("model_type", "regression"),
+        )
 
     # 5. Extract summary and insights for JSON response
     if is_classification:
@@ -279,25 +316,31 @@ async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, 
     # Slice to top 4 insights
     insights = insights[:4]
 
-    # Save the AI report markdown to the model document for later retrieval (e.g. for PDF)
-    await db_client.update_one(
-        "models",
-        {"_id": model_id},
-        {"$set": {"ai_explanation": full_report}}
-    )
+    with perf.stage("persist"):
+        # Save the AI report markdown to the model document for later retrieval (e.g. for PDF)
+        await db_client.update_one(
+            "models",
+            {"_id": model_id},
+            {"$set": {"ai_explanation": full_report}}
+        )
 
-    # Save report metadata to reports collection
-    report_doc = {
-        "_id": f"rep_{model_id}",
-        "user_id": user_id,
-        "model_id": model_id,
-        "summary": summary_text,
-        "insights": insights,
-        "full_report": full_report,
-        "created_at": pd.Timestamp.now().isoformat()
-    }
-    await db_client.insert_one("reports", report_doc)
+        # Save report metadata to reports collection — this is also the cache
+        # this function reads back from on a future call (see the top of this
+        # function). Delete-then-insert rather than upsert, so a force=True
+        # regeneration is correct whether or not a prior doc exists.
+        report_doc = {
+            "_id": f"rep_{model_id}",
+            "user_id": user_id,
+            "model_id": model_id,
+            "summary": summary_text,
+            "insights": insights,
+            "full_report": full_report,
+            "created_at": pd.Timestamp.now().isoformat()
+        }
+        await db_client.delete_one("reports", {"_id": f"rep_{model_id}"})
+        await db_client.insert_one("reports", report_doc)
 
+    perf.report()
     return {
         "summary": summary_text,
         "insights": insights,
@@ -306,7 +349,7 @@ async def run_ai_explanation_pipeline(model_id: str, user_id: str) -> Dict[str, 
 
 @router.post("/ai/explain")
 async def ai_explain(request: AIExplainRequest, current_user: dict = Depends(get_current_user)):
-    result = await run_ai_explanation_pipeline(request.model_id, current_user["_id"])
+    result = await run_ai_explanation_pipeline(request.model_id, current_user["_id"], force=request.force)
     return ok(result)
 
 @router.get("/ai-explanation")

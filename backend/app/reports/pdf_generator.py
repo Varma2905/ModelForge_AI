@@ -10,7 +10,11 @@ from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-from app.ml.feature_types import map_expanded_coefficients
+from app.ml.feature_types import (
+    map_expanded_coefficients,
+    _is_linear_regression_model,
+    _is_logistic_regression_model,
+)
 
 logger = logging.getLogger("regression_studio.pdf_generator")
 
@@ -134,19 +138,20 @@ def _report_styles() -> Dict[str, ParagraphStyle]:
     }
 
 
-# A high-cardinality categorical column (e.g. a customer-ID-like column
-# with hundreds/thousands of categories) one-hot-expands into one
-# coefficient PER CATEGORY — rendering every single one would produce a
-# report hundreds of pages long. Cap the table to the largest-magnitude
-# coefficients (the ones actually worth reading) and say so explicitly
-# rather than silently dropping the rest.
-_MAX_STATS_TABLE_ROWS = 30
+MAX_FEATURES_IN_REPORT = 10
+MAX_CATEGORIES_DISPLAYED = 10
+MAX_TABLE_ROWS = 10
+
+_MAX_STATS_TABLE_ROWS = MAX_TABLE_ROWS
+
 
 
 def _build_stats_table(
     coefs, p_values, std_errors, t_stats,
     numeric_features, categorical_features, encoded_categorical_names,
     table_cell_style, table_cell_header_style, body_style,
+    model_info: Dict[str, Any] = None,
+    disclaimer_text: str = None,
 ) -> List:
     """Builds the Variable/Coefficient/Std.Error/t-Statistic/p-Value/
     Significant table shared by the regression "Statistical Parameter
@@ -182,10 +187,32 @@ def _build_stats_table(
     se_by_idx = [e["value"] for e in mapped_se]
     t_by_idx = [e["value"] for e in mapped_t]
 
-    total_rows = len(mapped_coefs)
+    high_cardinality_features = {}
+    if model_info and "dataset_profile" in model_info:
+        for f in model_info["dataset_profile"].get("features", []):
+            if f.get("kind") == "categorical" and f.get("unique_count", 0) > MAX_CATEGORIES_DISPLAYED:
+                high_cardinality_features[f["name"]] = f["unique_count"]
+
+    filtered_coefs = []
+    filtered_p = []
+    filtered_se = []
+    filtered_t = []
+    omitted_features = set()
+
+    for i, entry in enumerate(mapped_coefs):
+        src_feat = entry.get("source_feature")
+        if src_feat in high_cardinality_features:
+            omitted_features.add(src_feat)
+        else:
+            filtered_coefs.append(entry)
+            filtered_p.append(p_by_idx[i] if i < len(p_by_idx) else None)
+            filtered_se.append(se_by_idx[i] if i < len(se_by_idx) else None)
+            filtered_t.append(t_by_idx[i] if i < len(t_by_idx) else None)
+
+    total_rows = len(filtered_coefs)
     # Largest-magnitude coefficients first — the ones actually worth a
     # reader's attention — then cap to a report-sized page count.
-    order = sorted(range(total_rows), key=lambda i: abs(mapped_coefs[i]["value"]) if mapped_coefs[i]["value"] is not None else -1, reverse=True)
+    order = sorted(range(total_rows), key=lambda i: abs(filtered_coefs[i]["value"]) if filtered_coefs[i]["value"] is not None else -1, reverse=True)
     shown_order = order[:_MAX_STATS_TABLE_ROWS]
 
     def _fmt(value, spec):
@@ -207,11 +234,11 @@ def _build_stats_table(
         ]
     ]
     for i in shown_order:
-        var_name = mapped_coefs[i]["feature"]
-        coef = mapped_coefs[i]["value"]
-        p_val = p_by_idx[i] if i < len(p_by_idx) else None
-        std_err = se_by_idx[i] if i < len(se_by_idx) else None
-        t_stat = t_by_idx[i] if i < len(t_by_idx) else None
+        var_name = filtered_coefs[i]["feature"]
+        coef = filtered_coefs[i]["value"]
+        p_val = filtered_p[i] if i < len(filtered_p) else None
+        std_err = filtered_se[i] if i < len(filtered_se) else None
+        t_stat = filtered_t[i] if i < len(filtered_t) else None
         sig = "YES" if isinstance(p_val, (int, float)) and p_val < 0.05 else ("N/A" if p_val is None else "NO")
         sig_color = "#10b981" if sig == "YES" else ("#94a3b8" if sig == "N/A" else "#ef4444")
 
@@ -224,17 +251,31 @@ def _build_stats_table(
             Paragraph(f"<font color='{sig_color}'><b>{sig}</b></font>", table_cell_style)
         ])
 
-    t_stats_table = Table(stats_rows, colWidths=[120, 75, 75, 75, 75, 80])
-    t_stats_table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#475569')),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#475569')),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-    ]))
+    flow: List = []
+    if disclaimer_text:
+        flow.append(Paragraph(f"<i>{disclaimer_text}</i>", body_style))
+        flow.append(Spacer(1, 6))
+    if total_rows > 0:
+        t_stats_table = Table(stats_rows, colWidths=[120, 75, 75, 75, 75, 80])
+        t_stats_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#475569')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#475569')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        flow.append(t_stats_table)
 
-    flow: List = [t_stats_table]
+    for feat in sorted(list(omitted_features)):
+        unique_val = high_cardinality_features[feat]
+        flow.append(Spacer(1, 4))
+        flow.append(Paragraph(
+            f"<i><b>{feat}</b> is a high-cardinality categorical feature with {unique_val} unique values. "
+            "Individual encoded coefficients are omitted from the report to maintain readability.</i>",
+            body_style,
+        ))
+
     if total_rows > len(shown_order):
         flow.append(Spacer(1, 6))
         flow.append(Paragraph(
@@ -249,7 +290,63 @@ def _build_stats_table(
 # Feature Summary can be as wide as the dataset has columns — capped for
 # the same "never let a report balloon to hundreds of pages" reason as the
 # stats coefficient table.
-_MAX_FEATURE_SUMMARY_ROWS = 40
+_MAX_FEATURE_SUMMARY_ROWS = MAX_TABLE_ROWS
+
+
+
+def _raw_feature_count(model_info: Dict[str, Any]) -> int:
+    """Raw, user-selected feature count — prefers the persisted
+    `feature_counts.raw_selected` (see training_routes.py/classify_routes.py/
+    cluster_routes.py train_model) and falls back to len(features) for any
+    model trained before that field existed."""
+    feature_counts = model_info.get("feature_counts") or {}
+    if isinstance(feature_counts.get("raw_selected"), int):
+        return feature_counts["raw_selected"]
+    return len(model_info.get("features", []) or [])
+
+
+def _encoded_feature_count_display(model_info: Dict[str, Any]) -> str:
+    """One-hot-expanded/final model input dimension count — distinct from
+    `_raw_feature_count` above so a report can show both instead of
+    conflating "features selected" with "columns actually fed to the
+    model" (see feature_counts persisted at train time). "N/A" for any
+    model trained before this field existed, rather than guessing."""
+    feature_counts = model_info.get("feature_counts") or {}
+    encoded = feature_counts.get("encoded_final")
+    return str(encoded) if isinstance(encoded, int) else "N/A"
+
+
+def _build_data_quality_notices(model_info: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> List:
+    """Non-fatal Data Quality Notices panel: surfaces warning-severity
+    validation issues (report_validation.py, run in report_routes.py before
+    this file is ever called) plus the target-leakage/identifier-column
+    warnings persisted at train time (feature_types.py's
+    detect_target_leakage/detect_identifier_target). Renders nothing when
+    there's nothing to say — same "no empty sections" convention as the
+    rest of this file's optional blocks."""
+    body_style = styles["body"]
+    warning_issues = [
+        i for i in (model_info.get("validation_issues") or [])
+        if i.get("severity") == "warning"
+    ]
+    leakage_warnings = model_info.get("leakage_warnings") or []
+    identifier_warnings = model_info.get("identifier_warnings") or []
+
+    notices: List[str] = []
+    notices.extend(i["message"] for i in warning_issues)
+    notices.extend(identifier_warnings)
+    notices.extend(w["detail"] if isinstance(w, dict) else str(w) for w in leakage_warnings)
+
+    if not notices:
+        return []
+
+    flow: List = []
+    flow.append(Paragraph("<b>Data Quality Notices</b>", body_style))
+    flow.append(Spacer(1, 4))
+    for notice in notices:
+        flow.append(Paragraph(f"• <font color='#b45309'>{notice}</font>", body_style))
+    flow.append(Spacer(1, 12))
+    return flow
 
 
 def _build_dataset_overview_section(profile: Dict[str, Any], model_info: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> List:
@@ -283,13 +380,19 @@ def _build_dataset_overview_section(profile: Dict[str, Any], model_info: Dict[st
             Paragraph("<b>Datetime Columns</b>", table_cell_style),
             Paragraph(str(profile.get("datetime_count", 0)), table_cell_style),
             Paragraph("<b>Input Features Used</b>", table_cell_style),
-            Paragraph(str(len(model_info.get("features", []) or [])), table_cell_style),
+            Paragraph(str(_raw_feature_count(model_info)), table_cell_style),
         ],
         [
             Paragraph("<b>Missing Values</b>", table_cell_style),
             Paragraph(f"{profile.get('missing_values_total', 0):,}", table_cell_style),
             Paragraph("<b>Duplicate Rows</b>", table_cell_style),
             Paragraph(f"{profile.get('duplicate_rows', 0):,}", table_cell_style),
+        ],
+        [
+            Paragraph("<b>Encoded/Model Input Dimensions</b>", table_cell_style),
+            Paragraph(_encoded_feature_count_display(model_info), table_cell_style),
+            Paragraph("", table_cell_style),
+            Paragraph("", table_cell_style),
         ],
     ]
     t = Table(rows, colWidths=[115, 135, 115, 135])
@@ -433,14 +536,31 @@ def _build_classification_analysis_section(model_info: Dict[str, Any], styles: D
     features = model_info.get("features", []) or []
     categorical_features = model_info.get("categorical_features", []) or []
     numeric_features = model_info.get("numerical_features", features) or features
-    flow.append(Paragraph("Coefficients (log-odds scale)", body_style))
+    real_model_name = model_info.get("model", "")
+    is_logistic = _is_logistic_regression_model(real_model_name)
+    section_title = (
+        "Coefficients (log-odds scale)" if is_logistic
+        else "Additional Statistical Analysis (Auxiliary Model: Logistic Regression)"
+    )
+    disclaimer = None
+    if not is_logistic:
+        disclaimer = (
+            f"This section fits an auxiliary Logistic/Multinomial Logistic Regression model to the same "
+            f"data to provide interpretable coefficients on the log-odds scale. It is a supplementary "
+            f"statistical view, not the actual trained {real_model_name or 'model'} used for the "
+            "predictions and metrics above."
+        )
+    flow.append(Paragraph(section_title, body_style))
     flow.append(Spacer(1, 6))
     flow.extend(_build_stats_table(
         stats.get("coefficients", {}), stats.get("p_values", {}),
         stats.get("standard_errors", {}), stats.get("t_statistics", {}),
         numeric_features, categorical_features, None,
         table_cell_style, table_cell_header_style, body_style,
+        model_info=model_info,
+        disclaimer_text=disclaimer,
     ))
+
 
     return flow
 
@@ -465,14 +585,10 @@ def _grid_layout(embeds: List) -> List:
     return [t_grid]
 
 
-def _is_linear_regression_model(model_name: str) -> bool:
-    """Matches the same OLS-family name variants get_regression_model()
-    accepts (app/ml/regression_models.py), so the equation section below
-    only renders for genuine unregularized Linear Regression — not Ridge/
-    Lasso/ElasticNet/Polynomial/tree/SVR models, whose math it doesn't
-    describe."""
-    name_clean = (model_name or "").replace(" ", "").lower()
-    return name_clean in ("linearregression", "linear", "multiplelinear", "multiplelinearregression")
+# _is_linear_regression_model / _is_logistic_regression_model now live in
+# app.ml.feature_types (imported above) so the explanation agents can share
+# them too, instead of each module keeping its own copy of the name-matching
+# logic.
 
 
 def _build_linear_regression_equation_section(model_info: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> List:
@@ -713,6 +829,140 @@ def _build_linear_regression_equation_section(model_info: Dict[str, Any], styles
     return flow
 
 
+def _build_classification_ai_insights_text(model_info: Dict[str, Any]) -> List[str]:
+    """Computes the 'AI Agent Insights' narrative DIRECTLY from real
+    metrics — overall performance, strongest/weakest class by F1, key
+    misclassifications, feature limitations, class-balance check, and
+    improvement suggestions. Deliberately does NOT depend on parsing
+    free-form LLM markdown (which may use any heading structure the model
+    chooses) — that fragile substring-matching is what previously fell back
+    to a generic "performance is steady across classes" sentence whenever
+    the LLM's own prose didn't happen to contain a matching heading. This
+    function is always accurate and never generic when the per-class
+    metrics actually differ, and never claims class imbalance unless the
+    real per-class support numbers support it.
+    """
+    metrics = model_info.get("metrics", {}) or {}
+    accuracy = metrics.get("Accuracy")
+    classes = [str(c) for c in (metrics.get("Classes") or [])]
+    class_report = metrics.get("ClassificationReport") or {}
+    conf_matrix = metrics.get("ConfusionMatrix") or []
+
+    # Every line below uses **markdown** bold (never a raw <b> tag) so it can
+    # go through clean_markdown_for_pdf() like the rest of this file — class
+    # names come from the user's own uploaded data and must be HTML-escaped
+    # before any ReportLab markup is applied, or a class label containing
+    # "&"/"<"/">" would crash the PDF's XML parser.
+    lines: List[str] = []
+
+    # 1. Overall model performance
+    if isinstance(accuracy, (int, float)):
+        if accuracy >= 0.90:
+            lines.append(f"**Overall performance:** the model performs excellently, correctly classifying {accuracy:.1%} of test samples.")
+        elif accuracy >= 0.75:
+            lines.append(f"**Overall performance:** the model performs well, correctly classifying {accuracy:.1%} of test samples.")
+        elif accuracy >= 0.60:
+            lines.append(f"**Overall performance:** the model performs moderately, correctly classifying only {accuracy:.1%} of test samples — there is meaningful room for improvement.")
+        else:
+            lines.append(f"**Overall performance:** the model performs weakly, correctly classifying only {accuracy:.1%} of test samples.")
+    else:
+        lines.append("**Overall performance:** accuracy was not available for this model.")
+
+    # 2. Strongest / weakest class by F1-score — never a generic "steady
+    # across classes" statement when the real per-class F1 values differ.
+    f1_by_class = [
+        (cls, class_report.get(cls, {}).get("f1-score"))
+        for cls in classes
+        if isinstance(class_report.get(cls, {}).get("f1-score"), (int, float))
+    ]
+    weakest_cls = None
+    f1_gap = 0.0
+    if f1_by_class:
+        strongest_cls, strongest_f1 = max(f1_by_class, key=lambda x: x[1])
+        weakest_cls, weakest_f1 = min(f1_by_class, key=lambda x: x[1])
+        f1_gap = strongest_f1 - weakest_f1
+        if len(f1_by_class) > 1 and f1_gap > 0.05:
+            lines.append(
+                f"**Strongest class:** {strongest_cls} (F1 = {strongest_f1:.3f}). "
+                f"**Weakest class:** {weakest_cls} (F1 = {weakest_f1:.3f}) — a real gap of "
+                f"{f1_gap:.3f}, not noise. Predictions for {weakest_cls} should be treated with extra caution."
+            )
+        else:
+            lines.append(
+                f"**Class-level performance** is relatively even: the strongest class is "
+                f"{strongest_cls} (F1 = {strongest_f1:.3f}) and the weakest is {weakest_cls} "
+                f"(F1 = {weakest_f1:.3f})."
+            )
+
+    # 3. Important misclassifications, straight from the confusion matrix.
+    if conf_matrix and classes and len(conf_matrix) == len(classes):
+        confusions = []
+        for i, row in enumerate(conf_matrix):
+            for j, count in enumerate(row):
+                if i != j and count > 0:
+                    confusions.append((classes[i], classes[j], count))
+        confusions.sort(key=lambda x: x[2], reverse=True)
+        if confusions:
+            top = confusions[:3]
+            conf_text = "; ".join(f"{a} misclassified as {p} ({c} cases)" for a, p, c in top)
+            lines.append(f"**Important misclassifications:** {conf_text}.")
+        else:
+            lines.append("**Important misclassifications:** none — the confusion matrix shows zero errors on the test set.")
+
+    # 4. Possible feature limitations — grounded in the actual F1 gap /
+    # overall accuracy, not a boilerplate sentence.
+    if weakest_cls and f1_gap > 0.05:
+        lines.append(
+            f"**Possible feature limitations:** the gap in performance for {weakest_cls} suggests the "
+            "current feature set may not fully capture what distinguishes it from the other classes — "
+            f"consider adding features specific to {weakest_cls}'s behavior, or reviewing whether its "
+            "samples overlap heavily with another class in feature space."
+        )
+    elif isinstance(accuracy, (int, float)) and accuracy < 0.75:
+        lines.append(
+            "**Possible feature limitations:** the relatively low overall accuracy suggests the current "
+            "feature set may not carry enough signal to separate the classes reliably — consider adding "
+            "more discriminative features."
+        )
+
+    # 5. Class balance — only claimed when the real per-class support
+    # numbers actually show a meaningful skew; otherwise say so explicitly.
+    support_by_class = [
+        class_report.get(cls, {}).get("support")
+        for cls in classes
+        if isinstance(class_report.get(cls, {}).get("support"), (int, float))
+    ]
+    if len(support_by_class) > 1:
+        ratio = max(support_by_class) / max(min(support_by_class), 1)
+        if ratio > 3:
+            lines.append(
+                f"**Class distribution:** the classes are noticeably imbalanced in the test set (the "
+                f"largest class is {ratio:.1f}x the size of the smallest), which can suppress recall on the "
+                "smaller class(es) regardless of feature quality."
+            )
+        elif isinstance(accuracy, (int, float)) and accuracy < 0.75:
+            lines.append(
+                "**Class distribution:** the class distribution is relatively balanced, so the low "
+                "performance is more likely related to insufficient predictive signal, feature "
+                "representation, or model configuration rather than severe class imbalance."
+            )
+
+    # 6. Practical, specific improvement suggestions.
+    suggestions = []
+    if weakest_cls:
+        suggestions.append(
+            f"collect more labeled examples for {weakest_cls}, or engineer features that specifically help "
+            "separate it from the class(es) it is most often confused with"
+        )
+    if isinstance(accuracy, (int, float)) and accuracy < 0.75:
+        suggestions.append("try a different algorithm and compare per-class F1, not just overall accuracy")
+    suggestions.append("review the Confusion Matrix and Per-Class Performance sections above for the exact numbers behind these observations")
+    if suggestions:
+        lines.append("**Practical improvement suggestions:** " + "; ".join(suggestions) + ".")
+
+    return lines
+
+
 def build_pdf_report(
     model_id: str,
     model_info: Dict[str, Any],
@@ -763,10 +1013,414 @@ def build_pdf_report(
         section_num += 1
         return heading
 
+    descriptions = {
+        "R2": "R-squared coefficient of determination. Represents percentage of explained variance.",
+        "Adjusted R2": "Adjusted R-squared. Adjusts for feature counts to prevent overestimation.",
+        "MSE": "Mean Squared Error. Measures average squared difference between predictions and targets.",
+        "RMSE": "Root Mean Squared Error. Shows average prediction error in target units.",
+        "MAE": "Mean Absolute Error. Average absolute size of prediction residuals.",
+        "MAPE": "Mean Absolute Percentage Error. Average error as a percentage of the actual value.",
+        "MSLE": "Mean Squared Logarithmic Error. Penalizes underprediction more than overprediction; undefined if any actual or predicted value is negative.",
+        "RMSLE": "Root Mean Squared Logarithmic Error. Square root of MSLE, in a log-scale error unit.",
+        "Median Absolute Error": "Median of the absolute prediction errors. Like MAE but robust to outlier residuals.",
+        "Max Error": "The single largest absolute prediction error observed on the test set — a worst-case bound, not an average.",
+        "Explained Variance": "Share of the target's variance the model accounts for. Similar to R², but not penalized by a systematic prediction bias (offset).",
+        "Pearson Correlation": "Linear correlation between actual and predicted values, from -1 to 1. Undefined for a constant array.",
+        "Spearman Correlation": "Rank correlation between actual and predicted values, from -1 to 1 — captures monotonic (not necessarily linear) agreement. Undefined for a constant array.",
+        "Accuracy": "Fraction of test samples classified correctly.",
+        "Precision": "Of everything predicted as a given class, the fraction that was actually correct.",
+        "Recall": "Of everything that actually belonged to a given class, the fraction correctly identified.",
+        "F1": "Harmonic mean of precision and recall — a single balanced classification quality measure.",
+        "ROC_AUC": "Area under the ROC curve. Measures how well the model ranks positive cases above negative ones.",
+        "BalancedAccuracy": "Average of per-class recall. Unlike plain Accuracy, not inflated by a large majority class.",
+        "MCC": "Matthews Correlation Coefficient. A single balanced score from -1 (always wrong) to +1 (always right), accounting for all four confusion-matrix quadrants.",
+        "LogLoss": "Penalizes confident-but-wrong predicted probabilities. Lower is better; requires the model to output probabilities.",
+        "Specificity": "True negative rate — of everything that actually belonged to the negative class, the fraction correctly identified as negative. Binary classification only.",
+        "Precision Macro": "Precision averaged equally across all classes regardless of class size.",
+        "Recall Macro": "Recall averaged equally across all classes regardless of class size.",
+        "F1 Macro": "F1-score averaged equally across all classes regardless of class size — a large gap from the weighted F1 suggests underperformance on a rarer class.",
+        "Precision Weighted": "Precision averaged across classes, weighted by each class's frequency in the test set.",
+        "Recall Weighted": "Recall averaged across classes, weighted by each class's frequency in the test set.",
+        "F1 Weighted": "F1-score averaged across classes, weighted by each class's frequency in the test set.",
+    }
+
+    is_classification_model = model_info.get("model_type", "regression") == "classification"
+    if is_classification_model:
+        story = []
+        
+        # --- PAGE 1: TITLE & COVER & EXECUTIVE SUMMARY ---
+        story.append(Paragraph("MODELFORGE AI STUDIO", title_style))
+        story.append(Paragraph(f"Classification Analytical Report | Model ID: {model_id}", subtitle_style))
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("Executive Summary", h1_style))
+        
+        exec_summary_text = ""
+        if "## Executive Summary" in ai_report_markdown:
+            parts = ai_report_markdown.split("## Executive Summary")
+            if len(parts) > 1:
+                content_after = parts[1]
+                next_heading_idx = content_after.find("\n## ")
+                if next_heading_idx != -1:
+                    exec_summary_text = content_after[:next_heading_idx].strip()
+                else:
+                    exec_summary_text = content_after.strip()
+        
+        if not exec_summary_text:
+            accuracy = model_info.get("metrics", {}).get("Accuracy", 0.0)
+            exec_summary_text = (
+                f"This document provides a comprehensive report of the machine learning classification analysis "
+                f"carried out using a <b>{model_info.get('model', 'N/A')}</b> algorithm. "
+                f"The model achieved a classification accuracy of <b>{accuracy:.2%}</b>. "
+                f"Detailed explanations of the dataset structure, model methodology, statistical calculations, "
+                f"and engineering recommendations are compiled below by the AI Agent Network."
+            )
+        
+        for line in exec_summary_text.split('\n'):
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+            if line_clean.startswith('- ') or line_clean.startswith('* '):
+                story.append(Paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
+            else:
+                story.append(Paragraph(clean_markdown_for_pdf(line_clean), body_style))
+
+        story.append(Spacer(1, 10))
+        story.extend(_build_data_quality_notices(model_info, s))
+        story.append(PageBreak())
+
+        # --- PAGE 2: DATASET OVERVIEW ---
+        dataset_profile = model_info.get("dataset_profile")
+        if dataset_profile:
+            story.append(Paragraph(next_section("Dataset Overview"), h1_style))
+            story.extend(_build_dataset_overview_section(dataset_profile, model_info, s))
+            story.append(Spacer(1, 15))
+            
+            story.append(Paragraph(next_section("Feature Summary (Top Columns)"), h1_style))
+            story.extend(_build_feature_summary_section(dataset_profile, model_info, s))
+            story.append(Spacer(1, 15))
+            story.append(PageBreak())
+
+        # --- PAGE 3: DATA QUALITY & PREPROCESSING ---
+        story.append(Paragraph(next_section("Data Quality & Preprocessing"), h1_style))
+        preprocessing_cfg = model_info.get("preprocessing", {}) or {}
+        dq_rows = [
+            [
+                Paragraph("<b>Total Rows</b>", table_cell_style),
+                Paragraph(f"{dataset_profile.get('total_rows', 0):,}" if dataset_profile else "N/A", table_cell_style),
+                Paragraph("<b>Total Columns</b>", table_cell_style),
+                Paragraph(f"{dataset_profile.get('total_columns', 0):,}" if dataset_profile else "N/A", table_cell_style),
+            ],
+            [
+                Paragraph("<b>Total Missing Values</b>", table_cell_style),
+                Paragraph(f"{dataset_profile.get('missing_values_total', 0):,}" if dataset_profile else "N/A", table_cell_style),
+                Paragraph("<b>Duplicate Rows</b>", table_cell_style),
+                Paragraph(f"{dataset_profile.get('duplicate_rows', 0):,}" if dataset_profile else "N/A", table_cell_style),
+            ],
+            [
+                Paragraph("<b>Missing Value Strategy</b>", table_cell_style),
+                Paragraph(str(preprocessing_cfg.get("missing", "none")), table_cell_style),
+                Paragraph("<b>Outlier Filtering</b>", table_cell_style),
+                Paragraph(str(preprocessing_cfg.get("outlier", "none")), table_cell_style),
+            ],
+            [
+                Paragraph("<b>Feature Scaling</b>", table_cell_style),
+                Paragraph(str(preprocessing_cfg.get("scaling", "none")), table_cell_style),
+                Paragraph("<b>Encoded Target</b>", table_cell_style),
+                Paragraph(str(model_info.get("target", "N/A")), table_cell_style),
+            ]
+        ]
+        t_dq = Table(dq_rows, colWidths=[120, 130, 120, 130])
+        t_dq.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f8fafc')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#e2e8f0')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 6),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        story.append(t_dq)
+        story.append(PageBreak())
+
+        # --- PAGE 4: MODEL CONFIGURATION ---
+        story.append(Paragraph(next_section("Model Configuration"), h1_style))
+        split_cfg = model_info.get("split", {}) or {}
+        test_pct = round(split_cfg.get("test_size", 0.2) * 100)
+        val_pct = round(split_cfg.get("val_size", 0.0) * 100)
+        train_pct = 100 - test_pct - val_pct
+        split_label = f"{train_pct}% Train / {test_pct}% Test"
+        if val_pct > 0:
+            split_label += f" / {val_pct}% Validation"
+
+        config_data = [
+            [
+                Paragraph("<b>Selected Algorithm</b>", table_cell_style),
+                Paragraph(str(model_info.get("model", "N/A")), table_cell_style),
+                Paragraph("<b>Features Used</b>", table_cell_style),
+                Paragraph(str(len(model_info.get("features", []))), table_cell_style)
+            ],
+            [
+                Paragraph("<b>Dataset Split Ratio</b>", table_cell_style),
+                Paragraph(split_label, table_cell_style),
+                Paragraph("<b>Hyperparameters</b>", table_cell_style),
+                Paragraph(str(model_info.get("hyperparameters", "default")), table_cell_style)
+            ]
+        ]
+        t_config = Table(config_data, colWidths=[120, 130, 120, 130])
+        t_config.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f8fafc')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#e2e8f0')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 6),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        story.append(t_config)
+        story.append(PageBreak())
+
+        # --- PAGE 5-6: MODEL EVALUATION METRICS ---
+        story.append(Paragraph(next_section("Model Evaluation Metrics"), h1_style))
+        metrics = model_info.get("metrics", {})
+        metrics_data = [
+            [Paragraph("Metric", table_cell_header_style), Paragraph("Value", table_cell_header_style), Paragraph("Description", table_cell_header_style)]
+        ]
+        for m_name in ["Accuracy", "Precision", "Recall", "F1", "BalancedAccuracy", "ROC_AUC", "LogLoss", "MCC", "Specificity"]:
+            if m_name in metrics and metrics[m_name] is not None:
+                desc = descriptions.get(m_name, "Model evaluation metric.")
+                metrics_data.append([
+                    Paragraph(f"<b>{m_name}</b>", table_cell_style),
+                    Paragraph(f"{metrics[m_name]:,.4f}" if isinstance(metrics[m_name], (int, float)) else str(metrics[m_name]), table_cell_style),
+                    Paragraph(desc, table_cell_style)
+                ])
+        t_metrics = Table(metrics_data, colWidths=[120, 80, 300])
+        t_metrics.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#1e3a8a')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        story.append(t_metrics)
+        story.append(PageBreak())
+
+        # --- PAGE 7: CONFUSION MATRIX ---
+        story.append(Paragraph(next_section("Confusion Matrix"), h1_style))
+        classes = [str(c) for c in (metrics.get("Classes") or model_info.get("classes") or [])]
+        conf_matrix = metrics.get("ConfusionMatrix") or []
+        if conf_matrix and classes and len(conf_matrix) == len(classes):
+            if len(classes) <= MAX_CATEGORIES_DISPLAYED:
+                header_row = [Paragraph("Actual \\ Predicted", table_cell_header_style)] + [
+                    Paragraph(c, table_cell_header_style) for c in classes
+                ]
+                cm_rows = [header_row]
+                for i, row in enumerate(conf_matrix):
+                    cm_rows.append(
+                        [Paragraph(f"<b>{classes[i]}</b>", table_cell_style)]
+                        + [Paragraph(str(v), table_cell_style) for v in row]
+                    )
+                col_width = min(90, 400 // max(len(classes), 1))
+                t_cm = Table(cm_rows, colWidths=[130] + [col_width] * len(classes))
+                t_cm.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+                    ('BACKGROUND', (0, 1), (0, -1), colors.HexColor('#1e3a8a')),
+                    ('BOX', (0, 0), (-1,-1), 1, colors.HexColor('#1e3a8a')),
+                    ('INNERGRID', (0, 0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+                    ('TOPPADDING', (0, 0), (-1,-1), 5),
+                    ('BOTTOMPADDING', (0, 0), (-1,-1), 5),
+                    ('VALIGN', (0, 0), (-1,-1), 'MIDDLE'),
+                ]))
+                story.append(t_cm)
+            else:
+                story.append(Paragraph(
+                    f"<i>Confusion matrix table is omitted from the report as the target variable has {len(classes)} classes. "
+                    "Please refer to the interactive dashboard for class-level prediction details.</i>",
+                    body_style,
+                ))
+            story.append(Spacer(1, 15))
+        
+        if "confusion_matrix" in graph_paths and os.path.exists(graph_paths["confusion_matrix"]):
+            story.append(Image(graph_paths["confusion_matrix"], width=230, height=172))
+        story.append(PageBreak())
+
+        # --- PAGE 8: PER-CLASS PERFORMANCE ---
+        story.append(Paragraph(next_section("Per-Class Performance"), h1_style))
+        class_report = metrics.get("ClassificationReport") or {}
+        per_class_rows = [
+            [
+                Paragraph("Class", table_cell_header_style),
+                Paragraph("Precision", table_cell_header_style),
+                Paragraph("Recall", table_cell_header_style),
+                Paragraph("F1-Score", table_cell_header_style),
+                Paragraph("Support", table_cell_header_style),
+            ]
+        ]
+        shown_classes = classes[:MAX_TABLE_ROWS]
+        for cls in shown_classes:
+            entry = class_report.get(cls) or {}
+            per_class_rows.append([
+                Paragraph(str(cls), table_cell_style),
+                Paragraph(f"{entry.get('precision', 0):.3f}" if isinstance(entry.get("precision"), (int, float)) else "N/A", table_cell_style),
+                Paragraph(f"{entry.get('recall', 0):.3f}" if isinstance(entry.get("recall"), (int, float)) else "N/A", table_cell_style),
+                Paragraph(f"{entry.get('f1-score', 0):.3f}" if isinstance(entry.get("f1-score"), (int, float)) else "N/A", table_cell_style),
+                Paragraph(str(int(entry["support"])) if isinstance(entry.get("support"), (int, float)) else "N/A", table_cell_style),
+            ])
+        if len(per_class_rows) > 1:
+            t_per_class = Table(per_class_rows, colWidths=[140, 90, 90, 90, 90])
+            t_per_class.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#475569')),
+                ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#475569')),
+                ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            story.append(t_per_class)
+            
+            if len(classes) > MAX_TABLE_ROWS:
+                story.append(Spacer(1, 4))
+                story.append(Paragraph(
+                    f"<i>Showing top {MAX_TABLE_ROWS} of {len(classes)} classes. Remaining class metrics are omitted from the report to maintain readability.</i>",
+                    body_style,
+                ))
+            story.append(Spacer(1, 15))
+
+        story.append(PageBreak())
+
+        # --- PAGES 9-10: EXPLORATORY DATA ANALYSIS / VISUALIZATIONS ---
+        # Target/Class Distribution now lives here (moved from the
+        # Per-Class Performance page above) alongside the other genuinely
+        # relevant EDA plots — Numerical Feature Distribution, Feature vs
+        # Target (classification-only, see ensure_graphs), and Correlation
+        # Heatmap. Each is embedded only if it actually exists (graceful
+        # skip, never an empty/broken chart) — see generate_dataset_graphs.
+        story.append(Paragraph(next_section("Exploratory Data Analysis"), h1_style))
+        dataset_embeds = []
+        for key in ("target_distribution", "distribution", "feature_vs_target", "correlation_heatmap", "boxplot", "categorical_frequency"):
+            if key in graph_paths and graph_paths[key] and os.path.exists(graph_paths[key]):
+                dataset_embeds.append(Image(graph_paths[key], width=230, height=172))
+        if dataset_embeds:
+            story.extend(_grid_layout(dataset_embeds))
+        else:
+            story.append(Paragraph("No exploratory visualizations could be generated for this dataset/feature combination.", body_style))
+        story.append(PageBreak())
+
+        # --- PAGE 11: FEATURE IMPORTANCE / EXPLAINABILITY ---
+        # Uses `visualizations.feature_importance` — computed from the
+        # ACTUAL trained sklearn model's own `feature_importances_` (tree
+        # ensembles) or `coef_` (linear models), see
+        # classification_evaluation.py's extract_feature_importance(). That
+        # function already returns None, honestly, for models with neither
+        # attribute (KNN, Gaussian Naive Bayes, non-linear-kernel SVM) — so
+        # this section only ever shows a table backed by the real model,
+        # never a fabricated one, and never the auxiliary statsmodels-fit
+        # coefficients used elsewhere purely for p-value significance.
+        story.append(Paragraph(next_section("Feature Importance & Explainability"), h1_style))
+        visualizations = model_info.get("visualizations") or {}
+        fi = visualizations.get("feature_importance") if isinstance(visualizations, dict) else None
+        fi_features = (fi or {}).get("features") or []
+        fi_values = (fi or {}).get("importance") or []
+
+        if fi_features and fi_values:
+            top_n = min(10, len(fi_features))
+            story.append(Paragraph(
+                f"Top {top_n} Feature Importance — computed from this model's own trained parameters.",
+                body_style,
+            ))
+            story.append(Spacer(1, 6))
+            fi_rows = [[
+                Paragraph("Rank", table_cell_header_style),
+                Paragraph("Feature", table_cell_header_style),
+                Paragraph("Importance", table_cell_header_style),
+            ]]
+            for idx, (feat, val) in enumerate(zip(fi_features[:top_n], fi_values[:top_n]), start=1):
+                fi_rows.append([
+                    Paragraph(str(idx), table_cell_style),
+                    Paragraph(str(feat), table_cell_style),
+                    Paragraph(f"{val:,.4f}" if isinstance(val, (int, float)) else "N/A", table_cell_style),
+                ])
+            t_fi = Table(fi_rows, colWidths=[50, 300, 150])
+            t_fi.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+                ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#1e3a8a')),
+                ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            story.append(t_fi)
+        else:
+            story.append(Paragraph("Feature importance is not directly available for this model.", body_style))
+        story.append(PageBreak())
+
+        # --- PAGE 12: ERROR ANALYSIS ---
+        story.append(Paragraph(next_section("Error Analysis"), h1_style))
+        error_analysis_text = ""
+        if conf_matrix and classes and len(conf_matrix) == len(classes):
+            worst_confusions = []
+            for i, row in enumerate(conf_matrix):
+                for j, count in enumerate(row):
+                    if i != j and count > 0:
+                        worst_confusions.append((classes[i], classes[j], count))
+            worst_confusions.sort(key=lambda x: x[2], reverse=True)
+            if worst_confusions:
+                error_analysis_text = "Based on the confusion matrix, here are the most confused classes:\n\n"
+                for act, pred, cnt in worst_confusions[:3]:
+                    error_analysis_text += f"- Class **`{act}`** was misclassified as **`{pred}`** {cnt} times.\n"
+            else:
+                error_analysis_text = "The confusion matrix shows zero errors on the test set. The model classifies all test samples correctly.\n"
+        
+        for line in error_analysis_text.split('\n'):
+            if line.strip():
+                story.append(Paragraph(clean_markdown_for_pdf(line), body_style))
+        story.append(PageBreak())
+
+        # --- PAGE 13: AI INSIGHTS ---
+        # Built deterministically from real metrics (see
+        # _build_classification_ai_insights_text) rather than parsed out of
+        # free-form LLM markdown — the LLM's own heading structure isn't
+        # guaranteed, and a failed parse used to silently fall back to a
+        # generic "performance is steady across classes" sentence even when
+        # the real per-class metrics differed meaningfully.
+        story.append(Paragraph(next_section("AI Agent Insights"), h1_style))
+        for line in _build_classification_ai_insights_text(model_info):
+            story.append(Paragraph(clean_markdown_for_pdf(line), body_style))
+            story.append(Spacer(1, 4))
+        story.append(PageBreak())
+
+        # --- PAGE 14: RECOMMENDATIONS ---
+        story.append(Paragraph(next_section("Recommendations"), h1_style))
+        recs_text = ""
+        if "## Diagnostic Recommendations" in ai_report_markdown:
+            parts = ai_report_markdown.split("## Diagnostic Recommendations")
+            recs_text = parts[1].strip()
+        elif "## Recommendations" in ai_report_markdown:
+            parts = ai_report_markdown.split("## Recommendations")
+            recs_text = parts[1].strip()
+        
+        if not recs_text:
+            recs_text = (
+                "- Try tree-based ensembling or hyperparameter fine-tuning.\n"
+                "- Address class imbalance if the distribution is highly skewed."
+            )
+            
+        for line in recs_text.split('\n'):
+            line_clean = line.strip()
+            if not line_clean or line_clean.startswith('|') or line_clean.startswith('+--'):
+                continue
+            if line_clean.startswith('- ') or line_clean.startswith('* '):
+                story.append(Paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
+            else:
+                story.append(Paragraph(clean_markdown_for_pdf(line_clean), body_style))
+                
+        doc.build(story)
+        return output_pdf_path
+
     # --- PAGE 1: TITLE & METRICS OVERVIEW ---
+
     story.append(Paragraph("MODELFORGE AI STUDIO", title_style))
     story.append(Paragraph(f"Analytical Report for Model ID: {model_id} | Generated on behalf of User Analysis History", subtitle_style))
     story.append(Spacer(1, 10))
+    story.extend(_build_data_quality_notices(model_info, s))
 
     # 0. Dataset Overview + Feature Summary — compact, dataset-independent
     # sections computed from the actual uploaded dataframe (see
@@ -961,7 +1615,21 @@ def build_pdf_report(
         story.append(Paragraph(next_section("Classification Analysis"), h1_style))
         story.extend(_build_classification_analysis_section(model_info, s))
     else:
-        story.append(Paragraph(next_section("Statistical Parameter Analysis"), h1_style))
+        real_model_name = model_info.get("model", "")
+        is_linear = _is_linear_regression_model(real_model_name)
+        section_title = (
+            "Statistical Parameter Analysis" if is_linear
+            else "Additional Statistical Analysis (Auxiliary Model: OLS)"
+        )
+        disclaimer = None
+        if not is_linear:
+            disclaimer = (
+                f"This section fits an auxiliary Ordinary Least Squares (OLS) model to the same data to "
+                f"provide interpretable coefficients, standard errors, and p-values. It is a supplementary "
+                f"statistical view, not the actual trained {real_model_name or 'model'} used for the "
+                "predictions and metrics above."
+            )
+        story.append(Paragraph(next_section(section_title), h1_style))
         stats = model_info.get("statistical_analysis", {})
         features = model_info.get("features", []) or []
         categorical_features = model_info.get("categorical_features", []) or []
@@ -971,7 +1639,10 @@ def build_pdf_report(
             stats.get("standard_errors", {}), stats.get("t_statistics", {}),
             numeric_features, categorical_features, None,
             table_cell_style, table_cell_header_style, body_style,
+            model_info=model_info,
+            disclaimer_text=disclaimer,
         ))
+
 
     story.append(PageBreak()) # Move to next page for visualizations
 

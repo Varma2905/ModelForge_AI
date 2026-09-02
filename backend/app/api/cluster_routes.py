@@ -172,6 +172,12 @@ async def train_model(
         model_instance = pipeline.named_steps["model"]
         X_transformed = preprocessor.transform(X)
         labels = np.asarray(labels)
+        feature_counts = {
+            "raw_selected": len(request.features),
+            "numeric": len(numeric_features),
+            "categorical": len(categorical_features),
+            "encoded_final": X_transformed.shape[1],
+        }
 
     with perf.stage("metrics + analysis"):
         metrics = calculate_clustering_metrics(X_transformed, labels)
@@ -216,6 +222,7 @@ async def train_model(
         "cluster_sizes": cluster_sizes,
         "cluster_profiles": cluster_profiles,
         "visualizations": visualizations,
+        "feature_counts": feature_counts,
         "status": "completed",
         "created_at": pd.Timestamp.now().isoformat(),
     }

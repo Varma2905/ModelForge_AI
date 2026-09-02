@@ -2,7 +2,7 @@ import os
 import re
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -61,6 +61,40 @@ def _clean_feature_name(name: str) -> str:
     return cleaned
 
 
+def _extract_markdown_section(markdown: str, heading_text: str) -> Tuple[Optional[str], str]:
+    """Pulls a '#### Recommendations' / '#### Limitations'-style section
+    (any heading level, case-insensitive) out of the AI agent's markdown —
+    used so the dedicated Recommendations/Limitations sections below render
+    the AI agent's actual, result-specific text (ClusteringInterpretationAgent
+    now emits both, see clustering_explanation_agent.py) instead of a static
+    3-bullet list, and so that same text isn't ALSO duplicated inside the
+    free-form "AI Agent Detailed Explanations" section further down.
+
+    Returns (extracted_body_or_None, markdown_with_that_section_removed).
+    """
+    lines = markdown.split("\n")
+    heading_re = re.compile(r"^#+\s*" + re.escape(heading_text) + r"\s*$", re.IGNORECASE)
+    any_heading_re = re.compile(r"^#+\s")
+
+    start_idx = None
+    for i, line in enumerate(lines):
+        if heading_re.match(line.strip()):
+            start_idx = i
+            break
+    if start_idx is None:
+        return None, markdown
+
+    end_idx = len(lines)
+    for j in range(start_idx + 1, len(lines)):
+        if any_heading_re.match(lines[j].strip()):
+            end_idx = j
+            break
+
+    body = "\n".join(lines[start_idx + 1:end_idx]).strip()
+    remaining = "\n".join(lines[:start_idx] + lines[end_idx:])
+    return (body or None), remaining
+
+
 def build_clustering_pdf_report(
     model_id: str,
     model_info: Dict[str, Any],
@@ -73,6 +107,16 @@ def build_clustering_pdf_report(
     """
     # 1. Run consistency validation
     validate_clustering_report(model_info)
+
+    # Pull the AI agent's actual Recommendations/Limitations sections out of
+    # the markdown up front — ClusteringInterpretationAgent (see
+    # clustering_explanation_agent.py) now emits both, grounded in this
+    # run's real metrics/algorithm. `ai_markdown_remaining` (with those two
+    # sections removed) is what "AI Agent Detailed Explanations" below
+    # renders, so the content appears once, in its own dedicated section,
+    # not duplicated inline too.
+    ai_recommendations, ai_markdown_remaining = _extract_markdown_section(ai_report_markdown, "Recommendations")
+    ai_limitations, ai_markdown_remaining = _extract_markdown_section(ai_markdown_remaining, "Limitations")
 
     # Ensure parent directories exist
     os.makedirs(os.path.dirname(output_pdf_path), exist_ok=True)
@@ -207,11 +251,15 @@ def build_clustering_pdf_report(
     numerical_features = model_info.get("numerical_features", [])
     categorical_features = model_info.get("categorical_features", [])
 
+    encoded_final = (model_info.get("feature_counts") or {}).get("encoded_final")
+    encoded_dims_display = str(encoded_final) if isinstance(encoded_final, int) else "N/A"
+
     pre_rows = [
         [Paragraph("<b>Numerical Scaling</b>", table_cell_style), Paragraph(f"StandardScaler (Scaling is distance-sensitive)" if preprocessing_cfg.get("scaling", "standard") == "standard" else str(preprocessing_cfg.get("scaling", "StandardScaler")), table_cell_style)],
         [Paragraph("<b>Categorical Encoding</b>", table_cell_style), Paragraph("OneHotEncoder(handle_unknown='ignore', drop='first')" if categorical_features else "None (No categorical columns selected)", table_cell_style)],
         [Paragraph("<b>Missing Value Strategy</b>", table_cell_style), Paragraph(str(preprocessing_cfg.get("missing", "median imputation")), table_cell_style)],
         [Paragraph("<b>Outlier Removal Strategy</b>", table_cell_style), Paragraph(str(preprocessing_cfg.get("outlier", "None")), table_cell_style)],
+        [Paragraph("<b>Encoded Feature Dimensions</b>", table_cell_style), Paragraph(f"{encoded_dims_display} (from {len(selected_features)} selected features)", table_cell_style)],
     ]
     t_pre = Table(pre_rows, colWidths=[150, 350])
     t_pre.setStyle(TableStyle([
@@ -433,8 +481,10 @@ def build_clustering_pdf_report(
     story.append(Paragraph(next_section("AI Agent Detailed Explanations"), h1_style))
     story.append(Spacer(1, 5))
     
-    # Process and append AI markdown paragraphs
-    raw_paragraphs = ai_report_markdown.split('\n')
+    # Process and append AI markdown paragraphs (Recommendations/Limitations
+    # already extracted above into their own dedicated sections below, so
+    # this uses the remainder rather than the raw markdown).
+    raw_paragraphs = ai_markdown_remaining.split('\n')
     current_text_block = []
     
     for line in raw_paragraphs:
@@ -483,26 +533,50 @@ def build_clustering_pdf_report(
         
     story.append(Spacer(1, 15))
 
-    # --- 11. RECOMMENDATIONS ---
+    # --- 11. RECOMMENDATIONS --- (from the AI agent's actual, result-
+    # specific analysis when available — see ai_recommendations extracted
+    # above — falling back to generic guidance only if the agent's output
+    # didn't include the section, which the fallback path always does.)
     story.append(Paragraph(next_section("Strategic Recommendations"), h1_style))
-    recs = [
-        "Use cluster groups to target distinct profiles individually rather than applying a single uniform strategy.",
-        "Compare stability of clusters by running alternative algorithms (e.g. comparing K-Means against DBSCAN/OPTICS to ensure divisions are stable).",
-        "Consider collecting additional analytical attributes that directly describe behavior to further refine grouping boundaries."
-    ]
-    for rec in recs:
-        story.append(Paragraph(f"• {rec}", body_style))
+    if ai_recommendations:
+        for line in ai_recommendations.split("\n"):
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+            if line_clean.startswith('- ') or line_clean.startswith('* '):
+                story.append(Paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
+            else:
+                story.append(Paragraph(clean_markdown_for_pdf(line_clean), body_style))
+    else:
+        recs = [
+            "Use cluster groups to target distinct profiles individually rather than applying a single uniform strategy.",
+            "Compare stability of clusters by running alternative algorithms (e.g. comparing K-Means against DBSCAN/OPTICS to ensure divisions are stable).",
+            "Consider collecting additional analytical attributes that directly describe behavior to further refine grouping boundaries."
+        ]
+        for rec in recs:
+            story.append(Paragraph(f"• {rec}", body_style))
     story.append(Spacer(1, 15))
 
-    # --- 12. LIMITATIONS ---
+    # --- 12. LIMITATIONS --- (same "AI-generated first, static fallback
+    # second" pattern as Recommendations above.)
     story.append(Paragraph(next_section("Methodological Limitations"), h1_style))
-    lims = [
-        "Unsupervised clustering indicates correlations and natural patterns, not causal relations.",
-        "Centroid-based algorithms (like K-Means) assume spherical clusters of similar size and density, which might not reflect complex real-world data structures.",
-        "One-hot encoded categorical variables scale differently than continuous ones, potentially biasing distance metrics."
-    ]
-    for lim in lims:
-        story.append(Paragraph(f"• {lim}", body_style))
+    if ai_limitations:
+        for line in ai_limitations.split("\n"):
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+            if line_clean.startswith('- ') or line_clean.startswith('* '):
+                story.append(Paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
+            else:
+                story.append(Paragraph(clean_markdown_for_pdf(line_clean), body_style))
+    else:
+        lims = [
+            "Unsupervised clustering indicates correlations and natural patterns, not causal relations.",
+            "Centroid-based algorithms (like K-Means) assume spherical clusters of similar size and density, which might not reflect complex real-world data structures.",
+            "One-hot encoded categorical variables scale differently than continuous ones, potentially biasing distance metrics."
+        ]
+        for lim in lims:
+            story.append(Paragraph(f"• {lim}", body_style))
 
     # Build document
     doc.build(story)

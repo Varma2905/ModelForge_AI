@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Dict, Any, List, Optional
 from app.services.huggingface_service import get_llm
-from app.ml.feature_types import map_expanded_coefficients
+from app.ml.feature_types import map_expanded_coefficients, _is_linear_regression_model
 
 logger = logging.getLogger("regression_studio.agents")
 
@@ -18,6 +18,7 @@ class StatisticalInterpretationAgent:
     async def explain(
         self, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str,
         numeric_features: Optional[List[str]] = None, categorical_features: Optional[List[str]] = None,
+        model_name: str = "",
     ) -> str:
         """
         Interprets OLS statistics and model performance.
@@ -34,23 +35,36 @@ class StatisticalInterpretationAgent:
         F-Pvalue: {stats.get('f_pvalue')}
         """
 
+        # Applied to BOTH the LLM response and the analytical fallback below
+        # — a system-prompt instruction alone isn't a reliable guarantee the
+        # LLM actually includes this caveat, so it's prepended deterministically
+        # here rather than left to the model's discretion.
+        aux_model_note = ""
+        if model_name and not _is_linear_regression_model(model_name):
+            aux_model_note = (
+                f"> **Note:** the coefficient/p-value figures below come from an auxiliary Ordinary Least "
+                f"Squares (OLS) fit used for interpretability — they describe correlational structure in the "
+                f"data, not the internal mechanics of the trained **{model_name}** model.\n\n"
+            )
+
         if self.llm:
             try:
                 system_msg = SystemMessage(content="You are a senior statistical analyst. Interpret the OLS regression summary metrics. Explain R-squared, RMSE, which features are statistically significant based on p-values, and what the coefficients mean in plain English. Format output in clean Markdown.")
                 human_msg = HumanMessage(content=f"Interpret these statistical regression results:\n{context}")
                 response = await self.llm.ainvoke([system_msg, human_msg])
-                return response.content
+                return aux_model_note + response.content
             except Exception as e:
                 logger.warning(f"StatisticalInterpretationAgent LLM failed: {e}. Falling back to statistical parser.")
 
         # Analytical fallback
-        return self._generate_analytical_fallback(
-            metrics, stats, features, target, numeric_features, categorical_features,
+        return aux_model_note + self._generate_analytical_fallback(
+            metrics, stats, features, target, numeric_features, categorical_features, model_name,
         )
 
     def _generate_analytical_fallback(
         self, metrics: Dict[str, float], stats: Dict[str, Any], features: List[str], target: str,
         numeric_features: Optional[List[str]] = None, categorical_features: Optional[List[str]] = None,
+        model_name: str = "",
     ) -> str:
         r2 = metrics.get("R2", 0.0)
         adj_r2 = metrics.get("Adjusted R2", 0.0)

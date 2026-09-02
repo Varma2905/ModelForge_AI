@@ -18,8 +18,9 @@ from sklearn.metrics import (
     roc_curve,
 )
 import statsmodels.api as sm
+from app.utils.sampling import thin_curve
 
-from app.ml.feature_types import map_expanded_coefficients
+from app.ml.feature_types import map_expanded_coefficients, extract_feature_importance  # noqa: F401 (re-exported for existing importers)
 
 logger = logging.getLogger("regression_studio.ml")
 
@@ -257,52 +258,9 @@ def extract_class_distribution(y: pd.Series, classes: List[Any]) -> Dict[str, Li
     return {"labels": label_order, "values": [counts.get(label, 0) for label in label_order]}
 
 
-def extract_feature_importance(
-    model_instance: Any,
-    feature_names_out: List[str],
-    numeric_features: List[str],
-    categorical_features: List[str],
-    encoded_categorical_names: List[str],
-) -> Optional[Dict[str, List[Any]]]:
-    """Native feature importance from the model the user actually trained —
-    tree ensembles' `feature_importances_` (impurity/gain-based) or linear
-    models' `coef_` (log-odds magnitude). Returns None for models with
-    neither attribute (KNN, Gaussian Naive Bayes, an SVM without a linear
-    kernel), so the frontend can report that truthfully instead of
-    substituting a proxy value.
-    """
-    if hasattr(model_instance, "feature_importances_"):
-        raw_values = np.asarray(model_instance.feature_importances_, dtype=float)
-    elif hasattr(model_instance, "coef_"):
-        coef = np.asarray(model_instance.coef_, dtype=float)
-        # coef_ is (n_features,) for a plain binary fit, or (n_classes,
-        # n_features) for multiclass (one row per class) — collapse to a
-        # single per-feature magnitude by averaging absolute values across
-        # classes, matching how the chart displays a single bar per feature.
-        raw_values = np.mean(np.abs(coef), axis=0) if coef.ndim == 2 else np.abs(coef)
-    else:
-        return None
-
-    if len(raw_values) != len(feature_names_out):
-        # Defensive: shouldn't happen for any currently supported model, but
-        # a mismatch here means the attribute doesn't actually correspond
-        # 1:1 to the preprocessor's output columns — safer to report
-        # "unavailable" than zip mismatched arrays and mis-attribute values.
-        logger.warning(
-            f"Feature importance length mismatch: {len(raw_values)} values for "
-            f"{len(feature_names_out)} feature columns. Skipping."
-        )
-        return None
-
-    raw = {name: float(v) for name, v in zip(feature_names_out, raw_values)}
-    mapped = map_expanded_coefficients(raw, numeric_features, categorical_features, encoded_categorical_names)
-    mapped = [e for e in mapped if e["value"] is not None]
-    mapped.sort(key=lambda e: abs(e["value"]), reverse=True)
-
-    return {
-        "features": [e["feature"] for e in mapped],
-        "importance": [e["value"] for e in mapped],
-    }
+# extract_feature_importance() moved to app.ml.feature_types (it has zero
+# classification-specific logic — see the re-export in this module's
+# imports above) so it can be reused for regression models too.
 
 
 def extract_roc_curve(y_true: np.ndarray, y_proba: Optional[np.ndarray], classes: List[Any]) -> Optional[Dict[str, Any]]:
@@ -319,7 +277,18 @@ def extract_roc_curve(y_true: np.ndarray, y_proba: Optional[np.ndarray], classes
         y_true_binary = (np.asarray(y_true) == classes[1]).astype(int)
         fpr, tpr, _ = roc_curve(y_true_binary, y_proba[:, 1])
         auc_value = float(roc_auc_score(y_true_binary, y_proba[:, 1]))
-        return {"fpr": [float(x) for x in fpr], "tpr": [float(x) for x in tpr], "auc": auc_value}
+        # Thinned for RENDERING only — roc_curve() returns one point per
+        # distinct probability threshold, which for a large test set can be
+        # thousands of points; a thinned curve looks visually identical since
+        # it's already monotonic, not a scatter of independent samples.
+        thinned = thin_curve(fpr=[float(x) for x in fpr], tpr=[float(x) for x in tpr])
+        return {
+            "fpr": thinned["fpr"],
+            "tpr": thinned["tpr"],
+            "auc": auc_value,
+            "sampled": thinned["sampled"],
+            "total_points": thinned["total_size"],
+        }
     except Exception as e:
         logger.warning(f"ROC curve computation failed: {e}")
         return None
@@ -335,7 +304,16 @@ def extract_precision_recall_curve(
     try:
         y_true_binary = (np.asarray(y_true) == classes[1]).astype(int)
         precision_vals, recall_vals, _ = precision_recall_curve(y_true_binary, y_proba[:, 1])
-        return {"precision": [float(x) for x in precision_vals], "recall": [float(x) for x in recall_vals]}
+        # Same rendering-only thinning as extract_roc_curve above.
+        thinned = thin_curve(
+            precision=[float(x) for x in precision_vals], recall=[float(x) for x in recall_vals],
+        )
+        return {
+            "precision": thinned["precision"],
+            "recall": thinned["recall"],
+            "sampled": thinned["sampled"],
+            "total_points": thinned["total_size"],
+        }
     except Exception as e:
         logger.warning(f"Precision-recall curve computation failed: {e}")
         return None

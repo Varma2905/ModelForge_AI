@@ -11,7 +11,12 @@ from sklearn.model_selection import train_test_split
 from app.auth.dependencies import get_current_user
 from app.database.mongodb import db_client
 from app.datasets import store as dataset_store
-from app.ml.feature_types import classify_columns, map_expanded_coefficients
+from app.ml.feature_types import (
+    classify_columns,
+    map_expanded_coefficients,
+    detect_identifier_target,
+    detect_target_leakage,
+)
 from app.ml.classification_models import build_classification_pipeline
 from app.ml.classification_evaluation import (
     calculate_classification_metrics,
@@ -24,6 +29,7 @@ from app.ml.classification_evaluation import (
 from app.ml.prediction import save_model_package
 from app.ml.classification_registry import list_classification_models
 from app.utils.response import ok, sanitize_floats
+from app.utils.sampling import sample_paired_series
 from app.utils.perf import PerfTimer
 from app.api.training_routes import _get_owned_dataset, DataSplitConfig
 
@@ -129,11 +135,19 @@ async def select_features(
             "Please apply missing-value preprocessing first.",
         )
 
-    high_cardinality_warnings = [
-        f"'{f}' appears to be an identifier and contains many unique values. Consider excluding it from the model."
-        for f in categorical_features
-        if classification[f]["high_cardinality"]
-    ]
+    warnings: List[str] = []
+    for f in request.features:
+        if classification[f].get("is_identifier"):
+            warnings.append(f"'{f}' appears to be an identifier. Consider excluding it from the model.")
+        elif classification[f].get("high_cardinality"):
+            warnings.append(f"'{f}' appears to be an identifier and contains many unique values. Consider excluding it from the model.")
+
+    identifier_target_warning = detect_identifier_target(request.target, classification)
+    if identifier_target_warning:
+        warnings.append(identifier_target_warning)
+
+    leakage_warnings = detect_target_leakage(df, request.target, request.features, classification)
+    warnings.extend(w["detail"] for w in leakage_warnings)
 
     return ok({
         "status": "validated",
@@ -141,7 +155,8 @@ async def select_features(
         "target": request.target,
         "numerical_features": numeric_features,
         "categorical_features": categorical_features,
-        "warnings": high_cardinality_warnings,
+        "warnings": warnings,
+        "leakage_warnings": leakage_warnings,
     })
 
 
@@ -251,6 +266,15 @@ async def train_model(
         categorical_features = [f for f in request.features if classification[f]["kind"] == "categorical"]
         scaling_method = dataset.get("preprocessing_config", {}).get("scaling", "none")
 
+        identifier_warnings: List[str] = []
+        for f in request.features:
+            if classification[f].get("is_identifier"):
+                identifier_warnings.append(f"'{f}' appears to be an identifier. Consider excluding it from the model.")
+        identifier_target_warning = detect_identifier_target(request.target, classification)
+        if identifier_target_warning:
+            identifier_warnings.append(identifier_target_warning)
+        leakage_warnings = detect_target_leakage(df, request.target, request.features, classification)
+
     with perf.stage("model_fit"):
         try:
             pipeline = build_classification_pipeline(
@@ -321,6 +345,12 @@ async def train_model(
     with perf.stage("statsmodels_logit"):
         try:
             feature_names_out = list(preprocessor.get_feature_names_out())
+            feature_counts = {
+                "raw_selected": len(request.features),
+                "numeric": len(numeric_features),
+                "categorical": len(categorical_features),
+                "encoded_final": len(feature_names_out),
+            }
             X_train_transformed = preprocessor.transform(X_train)
             X_train_named = pd.DataFrame(X_train_transformed, columns=feature_names_out, index=X_train.index)
             stats_properties = calculate_classification_statistical_properties(X_train_named, y_train, classes)
@@ -376,9 +406,16 @@ async def train_model(
             corr_df = df[corr_cols].corr().round(4).fillna(0)
             correlation_matrix = {"columns": corr_df.columns.tolist(), "matrix": corr_df.values.tolist()}
 
+        # Capped for interactive-chart RENDERING only — metrics above were
+        # already computed on the full test split. Same convention as
+        # training_routes.py's regression chart_data and
+        # graph_generator.py's _MAX_ROWS_FOR_PLOTS.
+        sampled_points = sample_paired_series(actual=y_test_actual_list, predicted=y_test_pred_list)
         chart_data = {
-            "actual": y_test_actual_list,
-            "predicted": y_test_pred_list,
+            "actual": sampled_points["actual"],
+            "predicted": sampled_points["predicted"],
+            "chart_points_sampled": sampled_points["sampled"],
+            "chart_points_total": sampled_points["total_size"],
             "feature_importance": feature_importance,
             "correlation_matrix": correlation_matrix,
             "confusion_matrix": {
@@ -442,6 +479,9 @@ async def train_model(
         "chart_data": chart_data,
         "visualizations": visualizations,
         "graph_paths": graph_paths,
+        "feature_counts": feature_counts,
+        "leakage_warnings": leakage_warnings,
+        "identifier_warnings": identifier_warnings,
         "status": "completed",
         "created_at": pd.Timestamp.now().isoformat(),
     }

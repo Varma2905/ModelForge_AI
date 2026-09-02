@@ -13,7 +13,13 @@ from sklearn.model_selection import train_test_split
 from app.auth.dependencies import get_current_user
 from app.database.mongodb import db_client
 from app.datasets import store as dataset_store
-from app.ml.feature_types import classify_columns, map_expanded_coefficients
+from app.ml.feature_types import (
+    classify_columns,
+    map_expanded_coefficients,
+    detect_identifier_target,
+    detect_target_leakage,
+    extract_feature_importance,
+)
 from app.ml.regression_models import build_pipeline
 from app.ml.regression_compatibility import check_regression_model_compatibility
 from app.ml.regression_registry import list_regression_models
@@ -21,6 +27,7 @@ from app.ml.evaluation import calculate_evaluation_metrics, calculate_statistica
 from app.ml.prediction import save_model_package, MODELS_DIR
 from app.visualization.graph_generator import generate_dataset_graphs, generate_regression_graphs
 from app.utils.response import ok, sanitize_floats
+from app.utils.sampling import sample_paired_series
 from app.utils.perf import PerfTimer
 
 logger = logging.getLogger("regression_studio.training_routes")
@@ -70,13 +77,19 @@ async def _get_owned_model(model_id: str, user_id: str) -> dict:
     return model_doc
 
 
-async def ensure_graphs(model_doc: dict) -> Dict[str, str]:
+async def ensure_graphs(model_doc: dict, preloaded_df: Optional[pd.DataFrame] = None) -> Dict[str, str]:
     """Generates and persists the PNG diagnostic charts for a trained model
     if they haven't been generated yet (see the note in train_model() for
     why this is deferred out of the training request). Reloads the saved
     model package and the source dataset to reproduce exactly what training
     would have plotted. Called from report_routes.py — the only two callers
-    that actually need these PNGs (the PDF report and the /graphs endpoint)."""
+    that actually need these PNGs (the PDF report and the /graphs endpoint).
+
+    `preloaded_df` lets a caller that already loaded the dataset for another
+    reason (report_routes.py's dataset profiling step) hand it over instead
+    of this function loading it again from disk — purely an I/O dedup, the
+    dataframe content and everything plotted from it is unchanged either way.
+    """
     if model_doc.get("graph_paths"):
         return model_doc["graph_paths"]
 
@@ -90,7 +103,7 @@ async def ensure_graphs(model_doc: dict) -> Dict[str, str]:
         return {}
 
     def _build_graphs() -> Dict[str, str]:
-        df = dataset_store.load_dataframe(dataset_id)
+        df = preloaded_df if preloaded_df is not None else dataset_store.load_dataframe(dataset_id)
         features = model_doc["features"]
         numeric_features = model_doc.get("numerical_features", features)
         categorical_features = model_doc.get("categorical_features", [])
@@ -142,9 +155,34 @@ async def ensure_graphs(model_doc: dict) -> Dict[str, str]:
             cat_encoder = preprocessor.named_transformers_["cat"].named_steps["encoder"]
             encoded_categorical_names = list(cat_encoder.get_feature_names_out(categorical_features))
 
-        ds_paths = generate_dataset_graphs(df[features], target, model_id, target_series=df[target])
+        # The trained model's OWN feature_importances_/coef_ (None for KNN,
+        # non-linear-kernel SVM/SVR, etc.) — preferred over the auxiliary
+        # OLS/Logit fit's coefficients for the PDF's Feature Importance
+        # chart, see generate_regression_graphs()/generate_classification_
+        # graphs()'s real_importance parameter.
+        real_importance = None
+        if preprocessor is not None:
+            try:
+                real_importance = extract_feature_importance(
+                    model_instance, list(preprocessor.get_feature_names_out()),
+                    numeric_features, categorical_features, encoded_categorical_names,
+                )
+            except Exception as e:
+                logger.warning(f"Real feature importance extraction failed for model {model_id}: {e}")
 
-        if model_doc.get("model_type", "regression") == "classification":
+        is_classification = model_doc.get("model_type", "regression") == "classification"
+        # Classification's EDA section draws from the FULL original dataset
+        # (not just the narrow subset of columns selected as model inputs) —
+        # a model trained on 1-2 features would otherwise leave the report's
+        # Exploratory Data Analysis section with little or nothing to show.
+        # Regression's behavior is untouched (still `df[features]` only).
+        ds_paths = generate_dataset_graphs(
+            df if is_classification else df[features],
+            target, model_id, target_series=df[target],
+            include_feature_vs_target=is_classification,
+        )
+
+        if is_classification:
             from app.visualization.graph_generator import generate_classification_graphs
             y_proba = (
                 model_instance.predict_proba(X_for_predict)
@@ -161,6 +199,7 @@ async def ensure_graphs(model_doc: dict) -> Dict[str, str]:
                 encoded_categorical_names=encoded_categorical_names,
                 coefficients=model_doc["statistical_analysis"]["coefficients"],
                 model_id=model_id,
+                real_importance=real_importance,
             )
         else:
             task_paths = generate_regression_graphs(
@@ -170,7 +209,8 @@ async def ensure_graphs(model_doc: dict) -> Dict[str, str]:
                 categorical_features=categorical_features,
                 encoded_categorical_names=encoded_categorical_names,
                 coefficients=model_doc["statistical_analysis"]["coefficients"],
-                model_id=model_id
+                model_id=model_id,
+                real_importance=real_importance,
             )
         return {**ds_paths, **task_paths}
 
@@ -251,11 +291,19 @@ async def select_features(
             "Please apply missing-value preprocessing first.",
         )
 
-    high_cardinality_warnings = [
-        f"'{f}' appears to be an identifier and contains many unique values. Consider excluding it from the model."
-        for f in categorical_features
-        if classification[f]["high_cardinality"]
-    ]
+    warnings: List[str] = []
+    for f in request.features:
+        if classification[f].get("is_identifier"):
+            warnings.append(f"'{f}' appears to be an identifier. Consider excluding it from the model.")
+        elif classification[f].get("high_cardinality"):
+            warnings.append(f"'{f}' appears to be an identifier and contains many unique values. Consider excluding it from the model.")
+
+    identifier_target_warning = detect_identifier_target(request.target, classification)
+    if identifier_target_warning:
+        warnings.append(identifier_target_warning)
+
+    leakage_warnings = detect_target_leakage(df, request.target, request.features, classification)
+    warnings.extend(w["detail"] for w in leakage_warnings)
 
     return ok({
         "status": "validated",
@@ -263,7 +311,8 @@ async def select_features(
         "target": request.target,
         "numerical_features": numeric_features,
         "categorical_features": categorical_features,
-        "warnings": high_cardinality_warnings,
+        "warnings": warnings,
+        "leakage_warnings": leakage_warnings,
     })
 
 # --- ROUTE 2: DATASET SPLITTING (preview only) ---
@@ -389,6 +438,15 @@ async def train_model(
         categorical_features = [f for f in request.features if classification[f]["kind"] == "categorical"]
         scaling_method = dataset.get("preprocessing_config", {}).get("scaling", "none")
 
+        identifier_warnings: List[str] = []
+        for f in request.features:
+            if classification[f].get("is_identifier"):
+                identifier_warnings.append(f"'{f}' appears to be an identifier. Consider excluding it from the model.")
+        identifier_target_warning = detect_identifier_target(request.target, classification)
+        if identifier_target_warning:
+            identifier_warnings.append(identifier_target_warning)
+        leakage_warnings = detect_target_leakage(df, request.target, request.features, classification)
+
     # 3.6 Reject a model/feature-selection combination that can't
     # meaningfully be trained (e.g. Simple Linear Regression with more than
     # one feature, or Polynomial Regression with zero numerical features)
@@ -450,6 +508,17 @@ async def train_model(
             n_samples=len(X_test),
             n_features=n_features_expanded,
         )
+        # Raw (user-selected) vs. numeric/categorical split vs. final
+        # one-hot-expanded model input width — persisted so reports can show
+        # all three instead of conflating "features used" with "model
+        # dimensions" (a categorical column with 10 categories expands to 10
+        # model input columns from 1 selected feature).
+        feature_counts = {
+            "raw_selected": len(request.features),
+            "numeric": len(numeric_features),
+            "categorical": len(categorical_features),
+            "encoded_final": n_features_expanded,
+        }
 
     # 6. Statistical OLS properties (using Statsmodels) — fit on the SAME
     # transformed train matrix the model itself was fit on, reconstructed as
@@ -537,10 +606,23 @@ async def train_model(
             "matrix": corr_df.values.tolist()
         }
 
+        # Interactive Recharts points are capped for RENDERING only — metrics
+        # above were already computed on the full y_test/y_test_pred. Without
+        # this, a large dataset's test split (e.g. 20k+ rows) would ship
+        # every single point to the browser and to Recharts' SVG renderer,
+        # which is the actual "Visualization is slow" cost for big datasets
+        # (this page never re-trains or re-predicts — see ensure_graphs()'s
+        # docstring for where PNG generation, the other slow path, lives).
+        # Same convention as graph_generator.py's _MAX_ROWS_FOR_PLOTS.
+        sampled_points = sample_paired_series(
+            actual=y_test_actual_list, predicted=y_test_pred_list, residuals=residuals_list,
+        )
         chart_data = {
-            "actual": y_test_actual_list,
-            "predicted": y_test_pred_list,
-            "residuals": residuals_list,
+            "actual": sampled_points["actual"],
+            "predicted": sampled_points["predicted"],
+            "residuals": sampled_points["residuals"],
+            "chart_points_sampled": sampled_points["sampled"],
+            "chart_points_total": sampled_points["total_size"],
             "feature_importance": feature_importance,
             "correlation_matrix": correlation_matrix
         }
@@ -588,6 +670,9 @@ async def train_model(
         "statistical_analysis": stats_properties,
         "chart_data": chart_data,
         "graph_paths": graph_paths,
+        "feature_counts": feature_counts,
+        "leakage_warnings": leakage_warnings,
+        "identifier_warnings": identifier_warnings,
         "status": "completed",
         "created_at": pd.Timestamp.now().isoformat()
     }

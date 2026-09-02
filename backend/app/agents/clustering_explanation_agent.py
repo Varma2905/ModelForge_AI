@@ -55,7 +55,10 @@ class ClusteringInterpretationAgent:
                     "- Cluster sizes & distribution balance\n"
                     "- Cluster profiles & important feature differences\n"
                     "- Potential interpretations\n"
-                    "- Limitations & Recommendations\n"
+                    "End with two explicitly labeled sections, in this exact order, each with its own '#### ' heading:\n"
+                    "'#### Recommendations' — 2-4 practical next steps grounded in the actual metrics/sizes above.\n"
+                    "'#### Limitations' — methodological caveats specific to this algorithm and result (e.g. the "
+                    "clustering assumptions this specific algorithm makes, and anything the metrics above can't tell you).\n"
                     "Clearly distinguish observed results from possible interpretations. Format output in clean Markdown."
                 ))
                 human_msg = HumanMessage(content=f"Interpret these clustering results:\n{context}")
@@ -143,6 +146,37 @@ class ClusteringInterpretationAgent:
             recommendations.append("The current configuration looks reasonable; consider comparing against a second algorithm to confirm the cluster structure is stable.")
         recommendations_text = "\n".join(f"- {r}" for r in recommendations)
 
+        # 6. Limitations — algorithm-specific methodological caveats (not a
+        # single static list for every algorithm) plus general caveats that
+        # always apply to unsupervised clustering, regardless of result.
+        algo_lower = (model_name or "").lower()
+        limitations = []
+        if "kmeans" in algo_lower.replace("-", "").replace(" ", "") or "k-means" in algo_lower:
+            limitations.append(
+                "K-Means assumes roughly spherical, similarly-sized clusters and can misrepresent "
+                "elongated or unevenly-sized groupings in the underlying data."
+            )
+        elif "dbscan" in algo_lower or "optics" in algo_lower:
+            limitations.append(
+                "Density-based clustering is sensitive to its density parameters (eps/min_samples); a "
+                "different setting can materially change which points are grouped versus marked as noise."
+            )
+        elif "hierarch" in algo_lower or "agglomerative" in algo_lower:
+            limitations.append(
+                "Hierarchical/agglomerative clustering's result depends on the chosen linkage method, and "
+                "cutting the dendrogram at a different height would produce a different number of clusters."
+            )
+        limitations.append(
+            "Unsupervised clustering reflects correlations and natural groupings in the data, not causal "
+            "relationships between features."
+        )
+        if silhouette is not None and silhouette < 0.5:
+            limitations.append(
+                f"With a Silhouette score of {silhouette:.3f}, cluster boundaries in this result carry real "
+                "ambiguity — treat individual cluster assignments as indicative rather than definitive."
+            )
+        limitations_text = "\n".join(f"- {l}" for l in limitations)
+
         markdown_output = f"""### Clustering Interpretation: **{model_name} Results**
 
 #### Cluster Quality
@@ -155,5 +189,8 @@ class ClusteringInterpretationAgent:
 
 #### Recommendations
 {recommendations_text}
+
+#### Limitations
+{limitations_text}
 """
         return markdown_output

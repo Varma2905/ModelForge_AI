@@ -70,6 +70,7 @@ def generate_dataset_graphs(
     target: Optional[str],
     model_id: str,
     target_series: Optional[pd.Series] = None,
+    include_feature_vs_target: bool = False,
 ) -> Dict[str, str]:
     """
     Generates dataset-specific visualization graphs, entirely from the
@@ -81,6 +82,10 @@ def generate_dataset_graphs(
     5. Category frequency bar charts for the categorical columns present
        in `df` (top N categories + "Other" per column, first few columns
        only) — see _MAX_CATEGORICAL_COLS_PLOTTED/_MAX_CATEGORIES_PER_COL.
+    6. Feature vs Target — grouped box-plots of the top numeric feature(s)
+       by target class. Opt-in via `include_feature_vs_target` (only the
+       classification report path passes True) so this never changes
+       regression/clustering EDA output.
 
     Every plot is generated independently in its own try/except so one
     failure (e.g. a single all-NaN column) never blocks the rest, and every
@@ -232,6 +237,42 @@ def generate_dataset_graphs(
         except Exception as e:
             logger.warning(f"Failed to generate categorical frequency graph: {e}")
 
+    # 6. Feature vs Target (classification report only, see
+    # `include_feature_vs_target`) — box-plots of the top numeric feature(s)
+    # grouped by target class. Skipped outright (not a fake/empty chart)
+    # when the target is continuous/high-cardinality (no discrete "groups"
+    # to plot against) or there are no numeric columns to relate to it.
+    if include_feature_vs_target and target_series is not None and numeric_cols:
+        is_continuous_target = (
+            pd.api.types.is_numeric_dtype(target_series)
+            and target_series.nunique(dropna=True) > _MAX_CLASSES_SHOWN
+        )
+        if not is_continuous_target:
+            try:
+                feats_to_plot = numeric_cols[:2]
+                n = len(feats_to_plot)
+                fig, axes = plt.subplots(nrows=1, ncols=n, figsize=(6 * n, 5), squeeze=False)
+                axes = axes.flatten()
+                plot_target = target_series.reindex(plot_df.index).astype(str)
+
+                for idx, col in enumerate(feats_to_plot):
+                    group_data = pd.DataFrame({col: plot_df[col], "__target__": plot_target})
+                    sns.boxplot(
+                        data=group_data, x="__target__", y=col, ax=axes[idx],
+                        hue="__target__", legend=False, palette="crest",
+                    )
+                    axes[idx].set_title(f"{col} by {target or 'target'}", fontsize=12, color="#f8f9fa")
+                    axes[idx].set_xlabel(target or "target")
+                    axes[idx].tick_params(axis="x", rotation=30)
+
+                plt.tight_layout()
+                fvt_path = os.path.join(graph_dir, "feature_vs_target.png")
+                plt.savefig(fvt_path, dpi=150, facecolor='#1e1e24')
+                plt.close()
+                paths["feature_vs_target"] = fvt_path
+            except Exception as e:
+                logger.warning(f"Failed to generate feature-vs-target graph: {e}")
+
     return paths
 
 def generate_regression_graphs(
@@ -241,14 +282,20 @@ def generate_regression_graphs(
     categorical_features: List[str],
     encoded_categorical_names: List[str],
     coefficients: Dict[str, float],
-    model_id: str
+    model_id: str,
+    real_importance: Optional[Dict[str, List[Any]]] = None,
 ) -> Dict[str, str]:
     """
     Generates regression-specific visualization graphs:
     1. Actual vs. Predicted scatter plot (with 45-degree reference line).
     2. Residual plot (residuals vs. predicted).
     3. Error Distribution histogram.
-    4. Feature Importance bar chart (if coefficients/feature importances are available).
+    4. Feature Importance bar chart — plots `real_importance` (the actual
+       trained model's own feature_importances_/coef_, see
+       app.ml.feature_types.extract_feature_importance) when available;
+       otherwise falls back to the auxiliary OLS fit's coefficients,
+       clearly titled as such so it's never mistaken for the trained
+       model's own signal.
     """
     graph_dir = ensure_graph_dir(model_id)
     paths = {}
@@ -320,34 +367,40 @@ def generate_regression_graphs(
 
     # 4. Feature Importance / Coefficients Bar Chart
     try:
-        # Maps expanded one-hot/scaled coefficient keys back to a display
-        # label attributed to their source column (e.g. "city = Chennai") —
-        # a plain `k in features` filter (the old approach) silently drops
-        # every categorical-derived coefficient once keys stop matching
-        # original feature names exactly.
-        mapped = map_expanded_coefficients(
-            coefficients, numeric_features, categorical_features, encoded_categorical_names,
-        )
-
-        if mapped:
-            plt.figure(figsize=(8, 6))
-
-            # Sort features by absolute coefficient size
+        if real_importance and real_importance.get("features"):
+            # The trained model's own feature_importances_/coef_ — always
+            # preferred over the auxiliary OLS fit below when available.
+            feat_names = list(real_importance["features"])
+            feat_vals = list(real_importance["importance"])
+            chart_title = "Feature Importance (Trained Model)"
+        else:
+            # Maps expanded one-hot/scaled coefficient keys back to a display
+            # label attributed to their source column (e.g. "city = Chennai") —
+            # a plain `k in features` filter (the old approach) silently drops
+            # every categorical-derived coefficient once keys stop matching
+            # original feature names exactly.
+            mapped = map_expanded_coefficients(
+                coefficients, numeric_features, categorical_features, encoded_categorical_names,
+            )
             sorted_coefs = sorted(mapped, key=lambda x: abs(x["value"]), reverse=True)
             feat_names = [x["feature"] for x in sorted_coefs]
             feat_vals = [x["value"] for x in sorted_coefs]
-            
+            chart_title = "Feature Impact — Auxiliary Linear Fit (not the trained model)"
+
+        if feat_names:
+            plt.figure(figsize=(8, 6))
+
             # Determine color based on positive/negative impact
             colors = ["#3b82f6" if val >= 0 else "#ef4444" for val in feat_vals]
-            
+
             sns.barplot(x=feat_vals, y=feat_names, palette=colors if len(colors) == len(feat_names) else None, hue=feat_names, legend=False)
             plt.axvline(x=0, color="#adb5bd", linestyle="-", linewidth=1)
-            
-            plt.title("Feature Impact (Coefficient / Importance Size)", fontsize=14, color="#f8f9fa")
-            plt.xlabel("Effect Size (Coefficient Value)", fontsize=12)
+
+            plt.title(chart_title, fontsize=14, color="#f8f9fa")
+            plt.xlabel("Effect Size (Coefficient / Importance Value)", fontsize=12)
             plt.ylabel("Features", fontsize=12)
             plt.tight_layout()
-            
+
             importance_path = os.path.join(graph_dir, "feature_importance.png")
             plt.savefig(importance_path, dpi=150, facecolor='#1e1e24')
             plt.close()
@@ -368,6 +421,7 @@ def generate_classification_graphs(
     encoded_categorical_names: List[str],
     coefficients: Dict[str, float],
     model_id: str,
+    real_importance: Optional[Dict[str, List[Any]]] = None,
 ) -> Dict[str, str]:
     """
     Generates classification-specific visualization graphs, mirroring
@@ -474,28 +528,34 @@ def generate_classification_graphs(
         except Exception as e:
             logger.warning(f"Failed to generate precision-recall curve graph: {e}")
 
-    # 4. Feature Importance / Coefficients Bar Chart — reused verbatim from
-    # generate_regression_graphs(), since map_expanded_coefficients() is
-    # already coefficient-dict-agnostic.
+    # 4. Feature Importance / Coefficients Bar Chart — prefers the trained
+    # model's own real importance (see generate_regression_graphs()'s
+    # matching block for the rationale), falling back to the auxiliary
+    # Logit/MNLogit fit's coefficients, clearly retitled as such.
     try:
-        mapped = map_expanded_coefficients(
-            coefficients, numeric_features, categorical_features, encoded_categorical_names,
-        )
-
-        if mapped:
-            plt.figure(figsize=(8, 6))
-
+        if real_importance and real_importance.get("features"):
+            feat_names = list(real_importance["features"])
+            feat_vals = list(real_importance["importance"])
+            chart_title = "Feature Importance (Trained Model)"
+        else:
+            mapped = map_expanded_coefficients(
+                coefficients, numeric_features, categorical_features, encoded_categorical_names,
+            )
             sorted_coefs = sorted(mapped, key=lambda x: abs(x["value"]), reverse=True)
             feat_names = [x["feature"] for x in sorted_coefs]
             feat_vals = [x["value"] for x in sorted_coefs]
+            chart_title = "Feature Impact — Auxiliary Logistic Fit (not the trained model)"
+
+        if feat_names:
+            plt.figure(figsize=(8, 6))
 
             colors = ["#3b82f6" if val >= 0 else "#ef4444" for val in feat_vals]
 
             sns.barplot(x=feat_vals, y=feat_names, palette=colors if len(colors) == len(feat_names) else None, hue=feat_names, legend=False)
             plt.axvline(x=0, color="#adb5bd", linestyle="-", linewidth=1)
 
-            plt.title("Feature Impact (Coefficient / Importance Size)", fontsize=14, color="#f8f9fa")
-            plt.xlabel("Effect Size (Coefficient Value)", fontsize=12)
+            plt.title(chart_title, fontsize=14, color="#f8f9fa")
+            plt.xlabel("Effect Size (Coefficient / Importance Value)", fontsize=12)
             plt.ylabel("Features", fontsize=12)
             plt.tight_layout()
 

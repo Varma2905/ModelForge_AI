@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Dict, Any, List, Optional
 from app.services.huggingface_service import get_llm
-from app.ml.feature_types import map_expanded_coefficients
+from app.ml.feature_types import map_expanded_coefficients, _is_logistic_regression_model
 
 logger = logging.getLogger("regression_studio.agents")
 
@@ -31,12 +31,80 @@ class ClassificationInterpretationAgent:
     async def explain(
         self, metrics: Dict[str, Any], stats: Dict[str, Any], features: List[str], target: str,
         numeric_features: Optional[List[str]] = None, categorical_features: Optional[List[str]] = None,
+        model_name: str = "",
     ) -> str:
         """
         Interprets classification metrics and Logit/MNLogit statistics.
         Returns a detailed Markdown analysis of Accuracy/Precision/Recall/F1,
         the confusion matrix, and feature significance.
         """
+        coefs = stats.get("coefficients", {}) or {}
+        p_vals = stats.get("p_values", {}) or {}
+        
+        cat_counts = {}
+        for k in coefs.keys():
+            if k.startswith("cat__"):
+                col_name = None
+                if categorical_features:
+                    for cf in categorical_features:
+                        if k.startswith(f"cat__{cf}_") or k == f"cat__{cf}":
+                            col_name = cf
+                            break
+                if not col_name:
+                    parts = k[5:].split("_")
+                    col_name = parts[0]
+                cat_counts[col_name] = cat_counts.get(col_name, 0) + 1
+
+        high_card_cols = {col for col, count in cat_counts.items() if count > 10}
+
+        filtered_coefs = {}
+        filtered_pvals = {}
+        omitted_notes = []
+        for col in sorted(list(high_card_cols)):
+            count = cat_counts[col]
+            omitted_notes.append(f"{col} is a high-cardinality categorical feature with {count} unique values. Individual encoded coefficients are omitted from the report to maintain readability.")
+
+        for k, v in coefs.items():
+            is_high_card = False
+            for col in high_card_cols:
+                if k.startswith(f"cat__{col}_") or k == f"cat__{col}":
+                    is_high_card = True
+                     # Wait, let's keep only top 10 features if we wanted to show top 10
+                    break
+            if not is_high_card:
+                filtered_coefs[k] = v
+
+        for k, v in p_vals.items():
+            is_high_card = False
+            for col in high_card_cols:
+                if k.startswith(f"cat__{col}_") or k == f"cat__{col}":
+                    is_high_card = True
+                    break
+            if not is_high_card:
+                filtered_pvals[k] = v
+
+        stats_clean = {
+            **stats,
+            "coefficients": filtered_coefs,
+            "p_values": filtered_pvals,
+        }
+
+        omitted_text = "\n".join(omitted_notes)
+
+        class_report = metrics.get("ClassificationReport") or {}
+        classes_list = metrics.get("Classes") or []
+        # Per-class support (test-set row counts) is the ONLY honest basis for
+        # a class-imbalance claim — pass it explicitly so the LLM checks real
+        # numbers instead of assuming imbalance whenever performance is weak.
+        per_class_lines = []
+        for cls in classes_list:
+            entry = class_report.get(str(cls)) or {}
+            per_class_lines.append(
+                f"  - {cls}: precision={entry.get('precision')}, recall={entry.get('recall')}, "
+                f"f1-score={entry.get('f1-score')}, support={entry.get('support')}"
+            )
+        per_class_text = "\n".join(per_class_lines) if per_class_lines else "Not available."
+
         context = f"""
         Evaluation Metrics: Accuracy={metrics.get('Accuracy')}, Precision={metrics.get('Precision')},
         Recall={metrics.get('Recall')}, F1={metrics.get('F1')}, ROC_AUC={metrics.get('ROC_AUC')},
@@ -44,27 +112,62 @@ class ClassificationInterpretationAgent:
         Log Loss={metrics.get('LogLoss')}, Specificity={metrics.get('Specificity')},
         Precision Macro={metrics.get('Precision Macro')}, Recall Macro={metrics.get('Recall Macro')}, F1 Macro={metrics.get('F1 Macro')}
         Classes: {metrics.get('Classes')}
+        Per-Class Performance (precision/recall/f1-score/support — support is the real per-class sample count, use it to judge class balance):
+{per_class_text}
         Confusion Matrix: {metrics.get('ConfusionMatrix')}
         Target Variable: {target}
         Feature Variables: {features}
-        Coefficients: {stats.get('coefficients')}
-        P-Values: {stats.get('p_values')}
+        Coefficients (Filtered): {filtered_coefs}
+        P-Values (Filtered): {filtered_pvals}
+        High-cardinality Categorical Features Omitted: {omitted_text}
         """
+
+        # Applied to BOTH the LLM response and the analytical fallback below
+        # — a system-prompt instruction alone isn't a reliable guarantee the
+        # LLM actually includes this caveat, so it's prepended deterministically
+        # here rather than left to the model's discretion.
+        aux_model_note = ""
+        if model_name and not _is_logistic_regression_model(model_name):
+            aux_model_note = (
+                f"> **Note:** the coefficient/p-value figures below come from an auxiliary Logistic/"
+                f"Multinomial Logistic Regression fit used for interpretability — they describe correlational "
+                f"structure in the data, not the internal mechanics of the trained **{model_name}** model.\n\n"
+            )
 
         if self.llm:
             try:
-                system_msg = SystemMessage(content="You are a senior data scientist. Interpret these classification model results. Explain accuracy, precision, recall, F1-score, what the confusion matrix reveals about the model's mistakes, and which features are statistically significant based on p-values. Coefficients are on the log-odds scale — explain them as increasing or decreasing the odds of a class, never as a 'change in the target value'. Format output in clean Markdown.")
+                system_msg = SystemMessage(content=(
+                    "You are a senior data scientist. Interpret these classification model results using ONLY "
+                    "the actual numbers provided below — never invent or estimate a value. Your response MUST "
+                    "explicitly cover, in this order: (1) overall model performance (accuracy/F1), "
+                    "(2) the STRONGEST-performing class, named explicitly, identified by comparing the per-class "
+                    "F1-scores provided, (3) the WEAKEST-performing class, named explicitly, identified the same "
+                    "way, (4) the most important misclassification pattern(s) from the confusion matrix, "
+                    "(5) plausible feature limitations that could explain the weak class's performance, and "
+                    "(6) 2-3 practical, specific improvement suggestions. "
+                    "Do NOT write generic statements like 'performance is steady across classes' — if the "
+                    "per-class F1-scores differ meaningfully, say so explicitly and name which classes. "
+                    "Only mention class imbalance if the per-class 'support' values actually show a meaningful "
+                    "skew — if support is roughly even across classes, explicitly state that the distribution is "
+                    "relatively balanced and that weak performance is more likely due to insufficient predictive "
+                    "signal, feature representation, or model configuration, not imbalance. "
+                    "Coefficients are on the log-odds scale — explain them as increasing or decreasing the odds "
+                    "of a class, never as a 'change in the target value'. Format output in clean Markdown with "
+                    "a '## Fit Quality' heading before the overall/strongest/weakest discussion. Do NOT output "
+                    "large tables of coefficients or duplicate metric tables."
+                ))
                 human_msg = HumanMessage(content=f"Interpret these classification results:\n{context}")
                 response = await self.llm.ainvoke([system_msg, human_msg])
-                return response.content
+                return aux_model_note + response.content
             except Exception as e:
                 logger.warning(f"ClassificationInterpretationAgent LLM failed: {e}. Falling back to statistical parser.")
 
-        return self._generate_analytical_fallback(metrics, stats, features, target, numeric_features, categorical_features)
+        return aux_model_note + self._generate_analytical_fallback(metrics, stats_clean, features, target, numeric_features, categorical_features, omitted_text, model_name)
 
     def _generate_analytical_fallback(
         self, metrics: Dict[str, Any], stats: Dict[str, Any], features: List[str], target: str,
         numeric_features: Optional[List[str]] = None, categorical_features: Optional[List[str]] = None,
+        omitted_text: str = "", model_name: str = "",
     ) -> str:
         accuracy = metrics.get("Accuracy") or 0.0
         precision = metrics.get("Precision") or 0.0
@@ -105,6 +208,66 @@ class ClassificationInterpretationAgent:
                 confusion_text = f"The model's most common mistake is misclassifying **`{actual_cls}`** as **`{pred_cls}`** ({count} such cases in the test set) — worth a closer look if this specific confusion is costly for your use case."
             else:
                 confusion_text = "The confusion matrix shows no off-diagonal errors on the test set — every test sample was classified correctly."
+
+        # 2.5 Strongest/weakest class by F1-score, plus a real class-balance
+        # check from actual per-class support — never assume imbalance, and
+        # never claim performance is "steady" when the per-class F1-scores
+        # actually differ (see the settings/spec that motivated this: a
+        # generic "steady across classes" statement is wrong whenever the
+        # weakest class's F1 is meaningfully below the strongest's).
+        class_report = metrics.get("ClassificationReport") or {}
+        class_perf_text = "Per-class performance data was not available for this model."
+        feature_limitation_text = ""
+        if class_report and classes:
+            f1_by_class = [
+                (cls, class_report.get(str(cls), {}).get("f1-score"))
+                for cls in classes
+                if isinstance(class_report.get(str(cls), {}).get("f1-score"), (int, float))
+            ]
+            if f1_by_class:
+                strongest_cls, strongest_f1 = max(f1_by_class, key=lambda x: x[1])
+                weakest_cls, weakest_f1 = min(f1_by_class, key=lambda x: x[1])
+                if len(f1_by_class) > 1 and (strongest_f1 - weakest_f1) > 0.05:
+                    class_perf_text = (
+                        f"Performance is **not uniform across classes**. **`{strongest_cls}`** is the "
+                        f"strongest-performing class (F1 = `{strongest_f1:.3f}`), while **`{weakest_cls}`** "
+                        f"is the weakest-performing class (F1 = `{weakest_f1:.3f}`) — a gap of "
+                        f"`{strongest_f1 - weakest_f1:.3f}`. Treat metrics for `{weakest_cls}` with caution "
+                        "in any downstream decision."
+                    )
+                    feature_limitation_text = (
+                        f"The gap between `{strongest_cls}` and `{weakest_cls}` suggests the current feature "
+                        f"set may not capture what distinguishes `{weakest_cls}` from the other classes — "
+                        "consider adding features specific to that class's behavior, or reviewing whether "
+                        f"`{weakest_cls}` samples overlap heavily with another class in feature space."
+                    )
+                else:
+                    class_perf_text = (
+                        f"Performance is **relatively even across classes** — the strongest class "
+                        f"(**`{strongest_cls}`**, F1 = `{strongest_f1:.3f}`) and weakest class "
+                        f"(**`{weakest_cls}`**, F1 = `{weakest_f1:.3f}`) are close enough that no single "
+                        "class stands out as a specific weak point."
+                    )
+
+            support_by_class = [
+                class_report.get(str(cls), {}).get("support")
+                for cls in classes
+                if isinstance(class_report.get(str(cls), {}).get("support"), (int, float))
+            ]
+            if len(support_by_class) > 1:
+                ratio = max(support_by_class) / max(min(support_by_class), 1)
+                if ratio > 3:
+                    class_perf_text += (
+                        f" The classes are also noticeably imbalanced in the test set (largest class is "
+                        f"{ratio:.1f}x the size of the smallest) — this alone can suppress recall on the "
+                        "smaller class(es) regardless of feature quality."
+                    )
+                elif accuracy < 0.75:
+                    class_perf_text += (
+                        " The class distribution is relatively balanced, so the lower performance is more "
+                        "likely related to insufficient predictive signal, feature representation, or model "
+                        "configuration rather than class imbalance."
+                    )
 
         # 3. Per-feature significance — same map_expanded_coefficients
         # pattern as the regression agent, but phrased in log-odds terms
@@ -212,14 +375,21 @@ class ClassificationInterpretationAgent:
 * **F1-Score:** `{f1:.3f}` — the harmonic mean of precision and recall, a single balanced measure of classification quality.
 {extra_metrics_text}
 
+#### Class-Level Performance
+{class_perf_text}
+{f'* **Possible feature limitation:** {feature_limitation_text}' if feature_limitation_text else ''}
+
 #### Confusion Matrix Insight
 {confusion_text}
 
 #### Parameter Significance & Relationships
 {significant_text}
 
+{omitted_text}
+
 {f'#### Statistically Insignificant Parameters (p > 0.05)\n{insignificant_text}' if insignificant_feats else ''}
 
 * **Intercept (Baseline Log-Odds):** {intercept_text}
+
 """
         return markdown_output

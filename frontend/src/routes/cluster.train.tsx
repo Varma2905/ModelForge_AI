@@ -22,6 +22,7 @@ function TrainPage() {
   const trainModel = useTrainClusteringModel();
 
   const canTrain = !!state.datasetId && !!state.model && state.features.length > 0;
+  const datasetRowCount = state.dataset?.totalRows ?? state.dataset?.rows.length ?? 0;
 
   if (!canTrain) {
     return (
@@ -86,7 +87,7 @@ function TrainPage() {
               : done
                 ? "Clustering Completed Successfully"
                 : isPending
-                  ? "Running Clustering…"
+                  ? `Running Clustering on ${datasetRowCount.toLocaleString()} rows…`
                   : "Ready to Cluster"}
           </CardTitle>
         </CardHeader>

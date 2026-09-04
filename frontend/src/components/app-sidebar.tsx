@@ -34,7 +34,7 @@ const WORKFLOW_PREFIXES = ["/new", "/classify", "/cluster"];
 const REST_ITEMS = [
   { title: "Data Sources", url: "/data-sources", icon: Database },
   { title: "Saved Models", url: "/history", icon: Layers },
-  { title: "Hugging Face Models", url: "/hf-models", icon: Boxes },
+
   { title: "Compare Models", url: "/compare", icon: GitCompare },
   { title: "Reports", url: "/reports", icon: FileText },
   { title: "AI Assistant", url: "/assistant", icon: Bot },
@@ -55,7 +55,7 @@ export function AppSidebar() {
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <div className="flex items-center gap-2 px-2 py-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[image:var(--gradient-brand)] text-white flex-shrink-0 shadow-lg shadow-primary/30">
+          <div className="flex h-9 w-9 aspect-square items-center justify-center rounded-full overflow-hidden bg-[image:var(--gradient-brand)] text-white flex-shrink-0 shadow-lg shadow-primary/30">
             <BrainCircuit className="h-5 w-5" />
           </div>
           <div className="flex flex-col min-w-0 group-data-[collapsible=icon]:hidden">

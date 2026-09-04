@@ -35,7 +35,7 @@ export function UserMenu({ variant }: { variant: "sidebar" | "topbar" }) {
   if (!user) return null;
 
   const avatar = (
-    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[image:var(--gradient-brand)] text-xs font-semibold text-white flex-shrink-0">
+    <div className="flex h-7 w-7 aspect-square items-center justify-center rounded-full overflow-hidden bg-[image:var(--gradient-brand)] text-xs font-semibold text-white flex-shrink-0">
       {initials(user.name) || "?"}
     </div>
   );
@@ -54,7 +54,7 @@ export function UserMenu({ variant }: { variant: "sidebar" | "topbar" }) {
       <button
         type="button"
         className={cn(
-          "flex h-8 w-8 items-center justify-center rounded-full transition-opacity hover:opacity-80",
+          "flex h-8 w-8 aspect-square items-center justify-center rounded-full flex-shrink-0 transition-opacity hover:opacity-80",
         )}
         aria-label="Account menu"
       >

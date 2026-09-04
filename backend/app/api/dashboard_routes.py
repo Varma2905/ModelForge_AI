@@ -1,12 +1,11 @@
 import math
-from datetime import datetime, timedelta
-
-from bson import ObjectId
-from fastapi import APIRouter, Depends
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import APIRouter, Depends
+
 from app.auth.dependencies import get_current_user
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.datasets import store as dataset_store
 from app.utils.response import ok, sanitize_floats
 
@@ -25,7 +24,7 @@ def _record_timestamp(doc: Dict[str, Any]) -> Optional[datetime]:
     """Best-effort creation time for a dashboard record. Models and reports
     always carry an explicit created_at, written with pd.Timestamp.now()
     (naive, server-local time). Datasets don't, so this falls back to the
-    timestamp embedded in their Mongo-style ObjectId _id — a real creation
+    timestamp embedded in their Mongo-style 24-char hex _id — a real creation
     time, not a fabricated one — but that's UTC, so it's converted to the
     system's local timezone (then stripped to naive) to match created_at's
     convention. Comparing it against local "now" without this conversion
@@ -38,9 +37,13 @@ def _record_timestamp(doc: Dict[str, Any]) -> Optional[datetime]:
         except (ValueError, TypeError):
             pass
     try:
-        return ObjectId(doc["_id"]).generation_time.astimezone().replace(tzinfo=None)
+        _id = str(doc.get("_id", ""))
+        if len(_id) == 24:
+            timestamp = int(_id[:8], 16)
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone().replace(tzinfo=None)
     except Exception:
-        return None
+        pass
+    return None
 
 
 def _pct_change(current: int, previous: int) -> Optional[float]:

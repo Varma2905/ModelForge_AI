@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 from pypdf import PdfReader
 
 from app.main import app
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.ml.feature_types import (
     detect_identifier_target,
     detect_target_leakage,

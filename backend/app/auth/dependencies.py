@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.auth.security import TokenError, decode_access_token
-from app.database.mongodb import db_client
+from app.database.database import db_client
 
 bearer_scheme = HTTPBearer(auto_error=False)
 

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Literal, Optional
 
 from app.auth.dependencies import get_current_user
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.datasets import store as dataset_store
 from app.agents.dataset_agent import DatasetAnalysisAgent
 from app.services.huggingface_service import get_llm

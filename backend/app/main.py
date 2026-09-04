@@ -14,7 +14,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("regression_studio.main")
 
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.api.auth_routes import router as auth_router
 from app.api.dataset_routes import router as dataset_router
 from app.api.dataset_source_routes import router as dataset_source_router
@@ -26,7 +26,6 @@ from app.api.prediction_routes import router as prediction_router
 from app.api.ai_routes import router as ai_router
 from app.api.report_routes import router as report_router
 from app.api.dashboard_routes import router as dashboard_router
-from app.api.hf_routes import router as hf_router
 from app.utils import crypto
 from app.utils.response import err
 
@@ -85,7 +84,6 @@ app.include_router(prediction_router)
 app.include_router(ai_router)
 app.include_router(report_router)
 app.include_router(dashboard_router)
-app.include_router(hf_router)
 
 # Database connection events
 @app.on_event("startup")
@@ -95,10 +93,7 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    # If using Motor/MongoDB client, close it
-    if db_client.client:
-        db_client.client.close()
-        logger.info("MongoDB connection closed.")
+    pass
 
 # Consistent error envelope for explicit HTTPExceptions raised in route handlers
 @app.exception_handler(HTTPException)
@@ -123,7 +118,7 @@ async def root():
     return {
         "status": "online",
         "service": "ModelForge AI Studio Backend",
-        "database_mode": "JSON Fallback" if db_client.use_fallback else "MongoDB Active"
+        "database_mode": "Local File Database"
     }
 
 if __name__ == "__main__":

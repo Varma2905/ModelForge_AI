@@ -22,6 +22,7 @@ function TrainPage() {
   const trainModel = useTrainModel();
 
   const canTrain = !!state.datasetId && !!state.target && !!state.model;
+  const datasetRowCount = state.dataset?.totalRows ?? state.dataset?.rows.length ?? 0;
 
   if (!canTrain) {
     return (
@@ -103,7 +104,7 @@ function TrainPage() {
               : done
                 ? "Model Trained Successfully"
                 : isPending
-                  ? "Training Regression Model…"
+                  ? `Training Regression Model on ${datasetRowCount.toLocaleString()} rows…`
                   : "Ready to Train"}
           </CardTitle>
         </CardHeader>

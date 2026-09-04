@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Any, Dict, Union
 
 from app.auth.dependencies import get_current_user
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.ml.prediction import predict_with_model, predict_class_with_model
 from app.utils.response import ok
 

@@ -2,19 +2,37 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Moon, Sun, Palette, Server, Sparkles, Database, UserCircle, LogOut, Trash2 } from "lucide-react";
+import {
+  Moon,
+  Sun,
+  Palette,
+  Sparkles,
+  Database,
+  UserCircle,
+  LogOut,
+  Trash2,
+  SlidersHorizontal,
+  Boxes,
+  Gauge,
+  LineChart,
+  FileText,
+} from "lucide-react";
 import { useTheme } from "@/lib/theme";
-import { getApiBaseUrl, setApiBaseUrl } from "@/lib/api-service";
 import { useAuth } from "@/lib/auth-context";
 import { getStoredUser } from "@/lib/auth-store";
 import { useDashboardSummary } from "@/hooks/use-dashboard";
 import { requireAuth } from "@/lib/require-auth";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { useModelForgeSettings } from "@/lib/settings-store";
+import { MlPreferencesTab } from "@/components/settings/ml-preferences-tab";
+import { ModelPreferencesTab } from "@/components/settings/model-preferences-tab";
+import { MetricsTab } from "@/components/settings/metrics-tab";
+import { VisualizationTab } from "@/components/settings/visualization-tab";
+import { ReportPreferencesTab } from "@/components/settings/report-preferences-tab";
 
 export const Route = createFileRoute("/settings")({
   beforeLoad: requireAuth,
@@ -23,18 +41,24 @@ export const Route = createFileRoute("/settings")({
 
 const TABS = [
   { value: "appearance", label: "Appearance", icon: Palette },
-  { value: "backend", label: "Backend", icon: Server },
+  { value: "ml-preferences", label: "ML Preferences", icon: SlidersHorizontal },
+  { value: "model-preferences", label: "Model Preferences", icon: Boxes },
+  { value: "metrics", label: "Metrics", icon: Gauge },
+  { value: "visualization", label: "Visualization", icon: LineChart },
+  { value: "report-preferences", label: "Report Preferences", icon: FileText },
   { value: "ai", label: "AI Settings", icon: Sparkles },
   { value: "data", label: "Data Overview", icon: Database },
   { value: "account", label: "Account", icon: UserCircle },
 ];
 
 function SettingsPage() {
+  const { settings, updateSection } = useModelForgeSettings();
+
   return (
     <div className="max-w-3xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Configure the studio to your preference.</p>
+        <p className="text-sm text-muted-foreground">Configure ModelForge AI Studio to your preference.</p>
       </div>
 
       <Tabs defaultValue="appearance" orientation="vertical" className="flex flex-col sm:flex-row gap-6">
@@ -54,8 +78,32 @@ function SettingsPage() {
           <TabsContent value="appearance" className="mt-0">
             <AppearanceTab />
           </TabsContent>
-          <TabsContent value="backend" className="mt-0">
-            <BackendTab />
+          <TabsContent value="ml-preferences" className="mt-0">
+            <MlPreferencesTab
+              value={settings.mlPreferences}
+              onSave={(next) => updateSection("mlPreferences", next)}
+            />
+          </TabsContent>
+          <TabsContent value="model-preferences" className="mt-0">
+            <ModelPreferencesTab
+              value={settings.modelPreferences}
+              onSave={(next) => updateSection("modelPreferences", next)}
+            />
+          </TabsContent>
+          <TabsContent value="metrics" className="mt-0">
+            <MetricsTab value={settings.metrics} onSave={(next) => updateSection("metrics", next)} />
+          </TabsContent>
+          <TabsContent value="visualization" className="mt-0">
+            <VisualizationTab
+              value={settings.visualization}
+              onSave={(next) => updateSection("visualization", next)}
+            />
+          </TabsContent>
+          <TabsContent value="report-preferences" className="mt-0">
+            <ReportPreferencesTab
+              value={settings.reportPreferences}
+              onSave={(next) => updateSection("reportPreferences", next)}
+            />
           </TabsContent>
           <TabsContent value="ai" className="mt-0">
             <AiSettingsTab />
@@ -95,36 +143,6 @@ function AppearanceTab() {
           onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
           aria-label="Toggle dark mode"
         />
-      </CardContent>
-    </Card>
-  );
-}
-
-function BackendTab() {
-  const [apiUrl, setApiUrl] = useState(getApiBaseUrl());
-
-  const saveApiUrl = () => {
-    const trimmed = apiUrl.trim();
-    setApiBaseUrl(trimmed);
-    setApiUrl(trimmed);
-    toast.success("API base URL saved");
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Backend</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div>
-          <Label>FastAPI URL</Label>
-          <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
-          <p className="text-xs text-muted-foreground mt-1">
-            Only change this if your backend runs somewhere other than the default. LLM API keys
-            are configured server-side and aren't set from the browser.
-          </p>
-        </div>
-        <Button onClick={saveApiUrl}>Save</Button>
       </CardContent>
     </Card>
   );

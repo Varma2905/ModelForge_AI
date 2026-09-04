@@ -1,15 +1,15 @@
 import json
 import logging
 import os
+import secrets
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from bson import ObjectId
 
 logger = logging.getLogger("regression_studio.datasets.store")
 
 # Filesystem-only dataset storage — deliberately NOT routed through
-# app/database/mongodb.py's db_client. Mirrors the on-disk convention
+# app/database/database.py's db_client. Mirrors the on-disk convention
 # app/ml/prediction.py already uses for trained model .pkl files
 # (MODELS_DIR: a flat directory of `{id}.ext` files, created at import time).
 # Each dataset is two files: `{dataset_id}.data.pkl` (row data only, via
@@ -29,7 +29,7 @@ os.makedirs(DATASETS_DIR, exist_ok=True)
 
 _INDEX_PATH = os.path.join(DATASETS_DIR, "_index.json")
 # In-memory cache of the index, mirroring DatabaseAdapter._fallback_cache in
-# app/database/mongodb.py — same single-process-only caveat applies.
+# app/database/database.py — same single-process-only caveat applies.
 _index_cache: Optional[Dict[str, Dict[str, Any]]] = None
 
 META_FIELDS = (
@@ -111,7 +111,7 @@ def save(df: pd.DataFrame, meta: Dict[str, Any], dataset_id: Optional[str] = Non
     missing_values are recomputed here from `df` so callers can't drift out
     of sync with what's actually stored."""
     if dataset_id is None:
-        dataset_id = str(ObjectId())
+        dataset_id = secrets.token_hex(12)
 
     # Pickle (not Parquet) for internal storage — see the DATASETS_DIR
     # comment above. Unlike pyarrow's Parquet writer, this round-trips

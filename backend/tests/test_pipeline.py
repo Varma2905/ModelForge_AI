@@ -11,7 +11,7 @@ if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
 # Now we can import the modules
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.ml.preprocessing import preprocess_dataframe
 from app.ml.regression_models import get_regression_model
 from app.ml.evaluation import calculate_evaluation_metrics, calculate_statistical_properties
@@ -25,9 +25,9 @@ async def run_pipeline_test():
     print("STARTING E2E BACKEND PIPELINE VERIFICATION")
     print("==================================================")
     
-    # Initialize DB (forces JSON fallback mode if MongoDB is offline)
+    # Initialize DB
     await db_client.connect()
-    print(f"Database initialized. Fallback mode: {db_client.use_fallback}")
+    print("Database initialized.")
     
     # 1. Create a dummy dataset with missing values and outliers
     raw_data = {

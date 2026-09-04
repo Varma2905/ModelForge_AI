@@ -17,7 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.datasets import store as dataset_store
 
 BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

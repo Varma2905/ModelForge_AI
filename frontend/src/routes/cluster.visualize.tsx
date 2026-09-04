@@ -98,6 +98,19 @@ function VisualizePage() {
     );
   }
 
+  if (metricsQuery.isError) {
+    return (
+      <div>
+        <WizardSteps steps={clusteringSteps} />
+        <Card>
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            Unable to generate visualization.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const viz = metricsQuery.data?.visualizations;
   const axisProps = { stroke: t.mutedForeground, tick: t.axisTick };
 
@@ -139,6 +152,9 @@ function VisualizePage() {
   return (
     <div>
       <WizardSteps steps={clusteringSteps} />
+      {metricsQuery.isLoading && (
+        <p className="text-sm text-muted-foreground mb-3">Preparing visualizations…</p>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* PCA 2D Cluster Plot */}

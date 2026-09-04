@@ -1,13 +1,13 @@
 import logging
+import secrets
 from datetime import datetime, timezone
 
-from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
 from app.auth.dependencies import get_current_user
 from app.auth.security import create_access_token, hash_password, verify_password
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.utils.response import ok
 
 logger = logging.getLogger("regression_studio.auth_routes")
@@ -54,7 +54,7 @@ async def signup(request: SignupRequest):
         )
 
     user_doc = {
-        "_id": str(ObjectId()),
+        "_id": secrets.token_hex(12),
         "name": request.name.strip(),
         "email": normalized_email,
         "password_hash": hash_password(request.password),

@@ -126,6 +126,7 @@ function ExplainPage() {
         <div className="lg:col-span-2 space-y-6">
           {explainQuery.isLoading ? (
             <>
+              <p className="text-sm text-muted-foreground">Generating AI insights…</p>
               <Skeleton className="h-24 w-full" />
               <Skeleton className="h-24 w-full" />
               <Skeleton className="h-24 w-full" />
@@ -133,8 +134,7 @@ function ExplainPage() {
           ) : explainQuery.isError ? (
             <Card>
               <CardContent className="p-6 text-sm text-muted-foreground">
-                Couldn't generate the AI explanation right now. You can still review the charts
-                below and continue to the report.
+                AI insights could not be generated. Your model results are still available.
               </CardContent>
             </Card>
           ) : (

@@ -29,19 +29,73 @@ class ClassificationRecommendationAgent:
         Provides actionable suggestions to improve classification accuracy,
         handle class imbalance, and try alternate algorithms.
         """
+        p_vals = stats.get("p_values", {}) or {}
+        cat_counts = {}
+        for k in p_vals.keys():
+            if k.startswith("cat__"):
+                col_name = None
+                if categorical_features:
+                    for cf in categorical_features:
+                        if k.startswith(f"cat__{cf}_") or k == f"cat__{cf}":
+                            col_name = cf
+                            break
+                if not col_name:
+                    parts = k[5:].split("_")
+                    col_name = parts[0]
+                cat_counts[col_name] = cat_counts.get(col_name, 0) + 1
+
+        high_card_cols = {col for col, count in cat_counts.items() if count > 10}
+
+        filtered_pvals = {}
+        for k, v in p_vals.items():
+            is_high_card = False
+            for col in high_card_cols:
+                if k.startswith(f"cat__{col}_") or k == f"cat__{col}":
+                    is_high_card = True
+                    break
+            if not is_high_card:
+                filtered_pvals[k] = v
+
+        stats_clean = {
+            **stats,
+            "p_values": filtered_pvals,
+        }
+
+        class_report = metrics.get("ClassificationReport") or {}
+        classes_list = metrics.get("Classes") or []
+        support_by_class = {
+            str(cls): class_report.get(str(cls), {}).get("support")
+            for cls in classes_list
+        }
+
         context = f"""
         Current Model: {model_name}
         Evaluation Metrics: Accuracy={metrics.get('Accuracy')}, Precision={metrics.get('Precision')},
         Recall={metrics.get('Recall')}, F1={metrics.get('F1')}
+        Per-Class Support (real test-set sample count per class — the only honest basis for a class-imbalance claim): {support_by_class}
         Confusion Matrix: {metrics.get('ConfusionMatrix')}
         Features Used: {features}
         Target: {target}
-        P-Values: {stats.get('p_values')}
+        P-Values (Filtered): {filtered_pvals}
         """
 
         if self.llm:
             try:
-                system_msg = SystemMessage(content="You are a senior ML advisor. Suggest actionable steps to improve this classifier's accuracy, handle class imbalance, engineer features, and list alternative classification algorithms the user should try next. Output in clean Markdown format.")
+                system_msg = SystemMessage(content=(
+                    "You are a senior ML advisor. Suggest actionable steps to improve this classifier's "
+                    "accuracy, engineer features, and list alternative classification algorithms the user "
+                    "should try next. Output in clean Markdown format. "
+                    "IMPORTANT: do not assume or automatically claim class imbalance. First check the actual "
+                    "per-class support values provided above. Only recommend imbalance-handling techniques "
+                    "(class_weight='balanced', oversampling/SMOTE, etc.) if the support values genuinely show "
+                    "a meaningful skew (e.g. one class more than ~3x the size of another). If the classes are "
+                    "roughly balanced, explicitly state: 'The class distribution is relatively balanced, so "
+                    "the low performance is more likely related to insufficient predictive signal, feature "
+                    "representation, or model configuration rather than severe class imbalance.' and focus "
+                    "your recommendations on feature engineering, model choice, and hyperparameters instead. "
+                    "Start your response with the exact heading '## Recommendations' on its own line, since "
+                    "the report generator locates this section by that heading."
+                ))
                 human_msg = HumanMessage(content=f"Provide recommendations based on this classification model run:\n{context}")
                 response = await self.llm.ainvoke([system_msg, human_msg])
                 return response.content
@@ -49,7 +103,7 @@ class ClassificationRecommendationAgent:
                 logger.warning(f"ClassificationRecommendationAgent LLM failed: {e}. Falling back to analytical suggestions.")
 
         return self._generate_analytical_fallback(
-            model_name, metrics, stats, features, target, numeric_features, categorical_features,
+            model_name, metrics, stats_clean, features, target, numeric_features, categorical_features,
         )
 
     def _generate_analytical_fallback(
@@ -75,12 +129,21 @@ class ClassificationRecommendationAgent:
             if isinstance(e["value"], (int, float)) and e["value"] > 0.05
         ]
 
-        # Class-imbalance detection from the confusion matrix's row sums
-        # (actual class counts in the test split) — a >3x ratio between the
-        # largest and smallest class is a common rule-of-thumb imbalance
-        # threshold worth flagging.
-        class_counts = [sum(row) for row in conf_matrix] if conf_matrix else []
-        is_imbalanced = bool(class_counts) and max(class_counts) > 3 * max(min(class_counts), 1)
+        # Class-imbalance detection from the real per-class support in the
+        # classification report (falls back to confusion-matrix row sums —
+        # mathematically the same count, kept only for models trained before
+        # ClassificationReport was stored) — a >3x ratio between the largest
+        # and smallest class is a common rule-of-thumb imbalance threshold.
+        # Never assumed: only flagged when these actual counts warrant it.
+        class_report = metrics.get("ClassificationReport") or {}
+        class_counts = [
+            v for cls in classes
+            if isinstance((v := class_report.get(str(cls), {}).get("support")), (int, float))
+        ]
+        if not class_counts and conf_matrix:
+            class_counts = [sum(row) for row in conf_matrix]
+        is_imbalanced = bool(class_counts) and len(class_counts) > 1 and max(class_counts) > 3 * max(min(class_counts), 1)
+        is_balanced_check_possible = bool(class_counts) and len(class_counts) > 1
 
         recommendations = ["### Diagnostic Recommendations & Next Steps\n"]
 
@@ -94,11 +157,19 @@ class ClassificationRecommendationAgent:
 
         if is_imbalanced:
             recommendations.append(
-                "- **Class Imbalance Detected:** The classes in your test split are noticeably unequal in size. "
+                "- **Class Imbalance Detected:** The classes in your test split are noticeably unequal in size "
+                f"(largest class support is {max(class_counts) / max(min(class_counts), 1):.1f}x the smallest). "
                 "Consider `class_weight=\"balanced\"` (supported by Logistic Regression, SVM, Random Forest, and "
                 "similar models), oversampling the minority class (e.g. SMOTE), or evaluating with per-class "
                 "precision/recall rather than overall accuracy alone, since accuracy can look deceptively high "
                 "on an imbalanced dataset."
+            )
+        elif is_balanced_check_possible and accuracy < 0.75:
+            recommendations.append(
+                "- **Class Distribution:** The class distribution is relatively balanced, so the low performance "
+                "is more likely related to insufficient predictive signal, feature representation, or model "
+                "configuration rather than severe class imbalance — focus on the feature engineering and "
+                "algorithm suggestions below rather than imbalance-handling techniques."
             )
 
         if len(features) < 2:

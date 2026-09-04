@@ -35,6 +35,12 @@ export function useModelMetrics(modelId: string | null) {
     queryKey: ["model-metrics", modelId],
     queryFn: () => api.getModelMetrics(modelId as string),
     enabled: !!modelId,
+    // A trained model's metrics/chart_data never change in place — retraining
+    // always produces a new modelId — so treat a fetched result as immutable
+    // instead of refetching every time the user re-navigates Visualize/
+    // Explain/Report/Predict for the same model. Same reasoning already
+    // applied to useAiExplanation in use-reports.ts.
+    staleTime: Infinity,
   });
 }
 
@@ -92,6 +98,8 @@ export function useClassificationModelMetrics(modelId: string | null) {
     queryKey: ["model-metrics", modelId],
     queryFn: () => api.getClassificationModelMetrics(modelId as string),
     enabled: !!modelId,
+    // Immutable once trained — see useModelMetrics above.
+    staleTime: Infinity,
   });
 }
 
@@ -128,5 +136,7 @@ export function useClusteringModelMetrics(modelId: string | null) {
     queryKey: ["clustering-model-metrics", modelId],
     queryFn: () => api.getClusteringModelMetrics(modelId as string),
     enabled: !!modelId,
+    // Immutable once trained — see useModelMetrics above.
+    staleTime: Infinity,
   });
 }

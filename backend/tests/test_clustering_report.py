@@ -6,7 +6,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.reports.clustering_report import validate_clustering_report, build_clustering_pdf_report
 from app.ml.feature_types import classify_columns
 

@@ -584,7 +584,7 @@ def test_crypto_decrypt_fails_clean_after_key_rotation(monkeypatch):
 @pytest.fixture
 def clean_integrations(monkeypatch, tmp_path):
     from cryptography.fernet import Fernet
-    from app.database.mongodb import db_client
+    from app.database.database import db_client
 
     monkeypatch.setenv("INTEGRATION_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(db_client, "use_fallback", True)
@@ -611,7 +611,7 @@ def test_integrations_save_and_get_connection_roundtrip(clean_integrations):
 def test_integrations_save_connection_upserts_not_duplicates(clean_integrations):
     """Reconnecting (e.g. rotating an API key) must update the existing row,
     never create a second one for the same (user_id, provider)."""
-    from app.database.mongodb import db_client
+    from app.database.database import db_client
     from app.integrations import store as integrations_store
 
     asyncio.run(integrations_store.save_connection(

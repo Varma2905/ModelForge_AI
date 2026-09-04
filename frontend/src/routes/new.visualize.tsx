@@ -57,6 +57,19 @@ function VisualizePage() {
     );
   }
 
+  if (metricsQuery.isError) {
+    return (
+      <div>
+        <WizardSteps />
+        <Card>
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            Unable to generate visualization.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const scatterData = rows.map((r) => ({
     x: Number(r[firstFeatureIdx]) || 0,
     y: Number(r[targetIdx]) || 0,
@@ -95,6 +108,9 @@ function VisualizePage() {
   return (
     <div>
       <WizardSteps />
+      {metricsQuery.isLoading && (
+        <p className="text-sm text-muted-foreground mb-3">Preparing visualizations…</p>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5 mb-6">
         {metricCards.map((m) => (
           <MetricCard key={m.label} label={m.label} value={m.value} gradient={m.gradient} />

@@ -189,7 +189,7 @@ function AnalysisPage() {
       )}
 
       <div className="flex justify-end mt-6">
-        <Button onClick={() => navigate({ to: "/cluster/visualize" })}>Continue to Visualizations</Button>
+        <Button onClick={() => navigate({ to: "/cluster/explain" })}>Continue to AI Insights</Button>
       </div>
     </div>
   );

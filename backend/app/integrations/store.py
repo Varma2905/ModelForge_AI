@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.utils.crypto import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger("regression_studio.integrations.store")

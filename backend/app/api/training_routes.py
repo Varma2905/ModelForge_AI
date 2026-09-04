@@ -11,7 +11,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from app.auth.dependencies import get_current_user
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.datasets import store as dataset_store
 from app.ml.feature_types import (
     classify_columns,

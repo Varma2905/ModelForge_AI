@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_user
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.datasets import store as dataset_store
 from app.hf import provider as hf_provider
 from app.hf.client import HFClientError

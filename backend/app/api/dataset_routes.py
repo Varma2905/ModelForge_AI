@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 
 from app.auth.dependencies import get_current_user
-from app.database.mongodb import db_client
+from app.database.database import db_client
 from app.datasets import store
 from app.datasets.ingest import SUPPORTED_EXTENSIONS, ingest_source
 from app.datasets.providers.local import LocalFileProvider

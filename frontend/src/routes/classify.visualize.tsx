@@ -65,6 +65,19 @@ function VisualizePage() {
     );
   }
 
+  if (metricsQuery.isError) {
+    return (
+      <div>
+        <WizardSteps steps={classificationSteps} />
+        <Card>
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            Unable to generate visualization.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const chartData = metricsQuery.data?.chart_data;
   // The dedicated visualization payload (see backend classify_routes.py) —
   // every field on it is independently nullable, so each card below guards
@@ -109,7 +122,7 @@ function VisualizePage() {
       <div className="mb-6">
         <h2 className="text-lg font-semibold">Classification Visualizations</h2>
         <p className="text-sm text-muted-foreground">
-          Model: {metricsQuery.data?.model ?? "—"}
+          {metricsQuery.isLoading ? "Preparing visualizations…" : `Model: ${metricsQuery.data?.model ?? "—"}`}
         </p>
       </div>
 

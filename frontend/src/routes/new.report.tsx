@@ -6,7 +6,6 @@ import { WizardSteps } from "@/components/wizard-steps";
 import { useAnalysis } from "@/lib/analysis-store";
 import { useDownloadReport } from "@/hooks/use-reports";
 import { requireAuth } from "@/lib/require-auth";
-import { ApiError } from "@/lib/api-service";
 import { downloadBlob } from "@/lib/download-blob";
 import { Download, FileText, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -27,7 +26,10 @@ function ReportPage() {
       downloadBlob(blob, `regression-report-${state.modelId}.pdf`);
       toast.success("PDF report downloaded");
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to generate PDF report");
+      // The detailed error stays in the console for debugging — the user
+      // never sees a raw backend exception message.
+      console.error("Report generation failed:", err);
+      toast.error("Report generation failed. Please try again.");
     }
   };
 
@@ -62,7 +64,7 @@ function ReportPage() {
               ) : (
                 <Download className="h-4 w-4 mr-2" />
               )}
-              Download PDF Report
+              {downloadReport.isPending ? "Building report…" : "Download PDF Report"}
             </Button>
           </CardTitle>
         </CardHeader>

@@ -443,3 +443,33 @@ def test_validate_classification_report_flags_confusion_matrix_shape_mismatch():
     issues = validate_classification_report(model_info)
     codes = {i["code"] for i in issues}
     assert "CONFUSION_MATRIX_SHAPE_MISMATCH" in codes
+
+
+def test_clean_markdown_for_pdf_handles_multiplication_inside_adjacent_code_spans():
+    """Regression test for a live crash: an LLM-generated markdown table
+    with two adjacent inline-code spans, each containing a literal "*" used
+    for multiplication (e.g. `0.8*len(df)`), used to make clean_markdown_
+    for_pdf's italic regex pair the "*" in the first code span with the "*"
+    in the second, producing an <i> tag that opens inside one <font> block
+    and closes inside another — invalid, crossed XML nesting ReportLab
+    rejected with "saw </font> instead of expected </i>"."""
+    from app.reports.pdf_generator import clean_markdown_for_pdf, _safe_paragraph, _report_styles
+    from reportlab.platypus import Paragraph
+
+    raw = (
+        "| **8. Train-test split** | Avoid look-ahead bias. | "
+        "`train = df.iloc[:int(0.8*len(df))]`<br>`test = df.iloc[int(0.8*len(df)):]` |"
+    )
+    cleaned = clean_markdown_for_pdf(raw)
+    styles = _report_styles()
+    # Must not raise — this is the exact shape of input that used to crash
+    # PDF generation with a 500 (see the spawned follow-up task this test
+    # closes out).
+    Paragraph(f"<para>{cleaned}</para>", styles["body"])
+    # And the multiplication "*" must have survived as literal text inside
+    # its own <font> span, not been consumed as an emphasis marker.
+    assert "0.8*len(df)" in cleaned
+
+    # _safe_paragraph's fallback path itself must also never raise, even for
+    # deliberately malformed markup that slips past clean_markdown_for_pdf.
+    _safe_paragraph("<i>unclosed <font face=\"Courier\">mismatched</i> tags</font>", styles["body"])

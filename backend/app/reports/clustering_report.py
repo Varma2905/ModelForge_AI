@@ -8,7 +8,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-from app.reports.pdf_generator import _report_styles, clean_markdown_for_pdf, _grid_layout
+from app.reports.pdf_generator import _report_styles, clean_markdown_for_pdf, _grid_layout, _safe_paragraph
 
 def validate_clustering_report(model_info: Dict[str, Any]) -> None:
     """
@@ -493,13 +493,13 @@ def build_clustering_pdf_report(
             if current_text_block:
                 full_para = " ".join(current_text_block)
                 cleaned_para = clean_markdown_for_pdf(full_para)
-                story.append(Paragraph(cleaned_para, body_style))
+                story.append(_safe_paragraph(cleaned_para, body_style))
                 current_text_block = []
         elif line_clean.startswith('#') or line_clean.startswith('---'):
             if current_text_block:
                 full_para = " ".join(current_text_block)
                 cleaned_para = clean_markdown_for_pdf(full_para)
-                story.append(Paragraph(cleaned_para, body_style))
+                story.append(_safe_paragraph(cleaned_para, body_style))
                 current_text_block = []
                 
             if line_clean.startswith('---'):
@@ -513,23 +513,23 @@ def build_clustering_pdf_report(
                 story.append(Spacer(1, 8))
             else:
                 cleaned_header = clean_markdown_for_pdf(line_clean)
-                story.append(Paragraph(cleaned_header, h1_style))
+                story.append(_safe_paragraph(cleaned_header, h1_style))
         elif line_clean.startswith('- ') or line_clean.startswith('* '):
             if current_text_block:
                 full_para = " ".join(current_text_block)
                 cleaned_para = clean_markdown_for_pdf(full_para)
-                story.append(Paragraph(cleaned_para, body_style))
+                story.append(_safe_paragraph(cleaned_para, body_style))
                 current_text_block = []
             bullet_text = line_clean[2:].strip()
             cleaned_bullet = clean_markdown_for_pdf(bullet_text)
-            story.append(Paragraph(f"• {cleaned_bullet}", body_style))
+            story.append(_safe_paragraph(f"• {cleaned_bullet}", body_style))
         else:
             current_text_block.append(line_clean)
             
     if current_text_block:
         full_para = " ".join(current_text_block)
         cleaned_para = clean_markdown_for_pdf(full_para)
-        story.append(Paragraph(cleaned_para, body_style))
+        story.append(_safe_paragraph(cleaned_para, body_style))
         
     story.append(Spacer(1, 15))
 
@@ -544,9 +544,9 @@ def build_clustering_pdf_report(
             if not line_clean:
                 continue
             if line_clean.startswith('- ') or line_clean.startswith('* '):
-                story.append(Paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
+                story.append(_safe_paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
             else:
-                story.append(Paragraph(clean_markdown_for_pdf(line_clean), body_style))
+                story.append(_safe_paragraph(clean_markdown_for_pdf(line_clean), body_style))
     else:
         recs = [
             "Use cluster groups to target distinct profiles individually rather than applying a single uniform strategy.",
@@ -566,9 +566,9 @@ def build_clustering_pdf_report(
             if not line_clean:
                 continue
             if line_clean.startswith('- ') or line_clean.startswith('* '):
-                story.append(Paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
+                story.append(_safe_paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
             else:
-                story.append(Paragraph(clean_markdown_for_pdf(line_clean), body_style))
+                story.append(_safe_paragraph(clean_markdown_for_pdf(line_clean), body_style))
     else:
         lims = [
             "Unsupervised clustering indicates correlations and natural patterns, not causal relations.",

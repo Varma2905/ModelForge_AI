@@ -65,29 +65,75 @@ def clean_markdown_for_pdf(text: str) -> str:
     text = text.replace("&", "&amp;")
     text = text.replace("<", "&lt;")
     text = text.replace(">", "&gt;")
-    
-    # 2. Replace headers
+
+    # 2. Pull inline code spans out into placeholders BEFORE any bold/italic
+    # conversion runs. Inline code content is never re-parsed for markdown
+    # emphasis by any real markdown renderer, and skipping this step is
+    # exactly what used to crash PDF generation: LLM-generated code like
+    # `int(0.8*len(df))` uses "*" for multiplication, and with the code
+    # spans still inline, the italic regex below would happily pair that
+    # "*" with an unrelated "*" inside a LATER, separate code span (e.g.
+    # two adjacent `...` snippets joined by "<br>"), producing an <i> tag
+    # that opens inside one code span and closes inside another. Once both
+    # spans are then independently wrapped in their own <font> tags, the
+    # <i>/<font> tag pairs cross each other — invalid XML nesting ReportLab
+    # rejects with "saw </font> instead of expected </i>". Extracting code
+    # spans first means the "*" characters inside them are never visible to
+    # the italic regex at all.
+    code_spans: List[str] = []
+
+    def _stash_code(match: "re.Match") -> str:
+        code_spans.append(match.group(1))
+        return f"\x00CODE{len(code_spans) - 1}\x00"
+
+    text = re.sub(r'`(.*?)`', _stash_code, text)
+
+    # 3. Replace headers
     text = re.sub(r'^###\s+(.*?)$', r'<b><font color="#1e3a8a">\1</font></b>', text, flags=re.MULTILINE)
     text = re.sub(r'^####\s+(.*?)$', r'<b><font color="#475569">\1</font></b>', text, flags=re.MULTILINE)
     text = re.sub(r'^##\s+(.*?)$', r'<b><font size="14" color="#1e3a8a">\1</font></b>', text, flags=re.MULTILINE)
     text = re.sub(r'^#\s+(.*?)$', r'<b><font size="16" color="#1e3a8a">\1</font></b>', text, flags=re.MULTILINE)
-    
-    # 3. Replace bold (only asterisks to avoid variable name underscore clashes)
+
+    # 4. Replace bold (only asterisks to avoid variable name underscore clashes)
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    
-    # 4. Replace italic (only asterisks). Excludes commas/newlines from the
+
+    # 5. Replace italic (only asterisks). Excludes commas/newlines from the
     # matched span — without this, LLM-generated prose using literal
     # asterisks for multiplication in a list (e.g. "a*b, a*c, b*c") lets the
     # non-greedy match span across unrelated pairs ("*b, a*" here), producing
     # unbalanced <i> tags that crash ReportLab's XML parser. Genuine italic
     # phrases essentially never contain a bare comma, so this is a safe
-    # trade-off: crash prevention over converting that rare edge case.
+    # trade-off: crash prevention over converting that rare edge case. Code
+    # spans are already stashed out at this point (step 2), so a "*" used
+    # for multiplication inside one can no longer reach this regex at all.
     text = re.sub(r'\*([^*\n,]+?)\*', r'<i>\1</i>', text)
-    
-    # 5. Replace inline code blocks
-    text = re.sub(r'`(.*?)`', r'<font face="Courier">\1</font>', text)
-    
+
+    # 6. Restore the stashed code spans as <font> tags now that bold/italic
+    # conversion is done, so their content can never be split across an
+    # emphasis tag boundary.
+    for i, code in enumerate(code_spans):
+        text = text.replace(f"\x00CODE{i}\x00", f'<font face="Courier">{code}</font>')
+
     return text
+
+
+def _safe_paragraph(text: str, style: ParagraphStyle) -> Paragraph:
+    """Constructs a ReportLab Paragraph from `text` (assumed to already have
+    passed through clean_markdown_for_pdf), falling back to a plain-text
+    (fully re-escaped, no inline markup at all) Paragraph if ReportLab's own
+    XML-like parser still rejects the result — a defense-in-depth backstop
+    against any markdown/tag-nesting edge case clean_markdown_for_pdf
+    doesn't anticipate, since this renders free-form LLM-generated text.
+    One malformed paragraph should degrade to plain text, not fail the
+    entire report."""
+    try:
+        return Paragraph(text, style)
+    except Exception as e:
+        logger.warning(f"Paragraph markup rejected by ReportLab, falling back to plain text: {e}")
+        plain = re.sub(r"<[^>]+>", "", text)
+        plain = plain.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        plain = plain.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return Paragraph(plain, style)
 
 
 def _report_styles() -> Dict[str, ParagraphStyle]:
@@ -1080,9 +1126,9 @@ def build_pdf_report(
             if not line_clean:
                 continue
             if line_clean.startswith('- ') or line_clean.startswith('* '):
-                story.append(Paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
+                story.append(_safe_paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
             else:
-                story.append(Paragraph(clean_markdown_for_pdf(line_clean), body_style))
+                story.append(_safe_paragraph(clean_markdown_for_pdf(line_clean), body_style))
 
         story.append(Spacer(1, 10))
         story.extend(_build_data_quality_notices(model_info, s))
@@ -1371,7 +1417,7 @@ def build_pdf_report(
         
         for line in error_analysis_text.split('\n'):
             if line.strip():
-                story.append(Paragraph(clean_markdown_for_pdf(line), body_style))
+                story.append(_safe_paragraph(clean_markdown_for_pdf(line), body_style))
         story.append(PageBreak())
 
         # --- PAGE 13: AI INSIGHTS ---
@@ -1383,7 +1429,7 @@ def build_pdf_report(
         # the real per-class metrics differed meaningfully.
         story.append(Paragraph(next_section("AI Agent Insights"), h1_style))
         for line in _build_classification_ai_insights_text(model_info):
-            story.append(Paragraph(clean_markdown_for_pdf(line), body_style))
+            story.append(_safe_paragraph(clean_markdown_for_pdf(line), body_style))
             story.append(Spacer(1, 4))
         story.append(PageBreak())
 
@@ -1408,9 +1454,9 @@ def build_pdf_report(
             if not line_clean or line_clean.startswith('|') or line_clean.startswith('+--'):
                 continue
             if line_clean.startswith('- ') or line_clean.startswith('* '):
-                story.append(Paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
+                story.append(_safe_paragraph(f"• {clean_markdown_for_pdf(line_clean[2:])}", body_style))
             else:
-                story.append(Paragraph(clean_markdown_for_pdf(line_clean), body_style))
+                story.append(_safe_paragraph(clean_markdown_for_pdf(line_clean), body_style))
                 
         doc.build(story)
         return output_pdf_path
@@ -1736,14 +1782,14 @@ def build_pdf_report(
             if current_text_block:
                 full_para = " ".join(current_text_block)
                 cleaned_para = clean_markdown_for_pdf(full_para)
-                story.append(Paragraph(cleaned_para, body_style))
+                story.append(_safe_paragraph(cleaned_para, body_style))
                 current_text_block = []
         elif line_clean.startswith('#') or line_clean.startswith('---'):
             # Clear text block first
             if current_text_block:
                 full_para = " ".join(current_text_block)
                 cleaned_para = clean_markdown_for_pdf(full_para)
-                story.append(Paragraph(cleaned_para, body_style))
+                story.append(_safe_paragraph(cleaned_para, body_style))
                 current_text_block = []
                 
             if line_clean.startswith('---'):
@@ -1758,7 +1804,7 @@ def build_pdf_report(
                 story.append(Spacer(1, 8))
             else:
                 cleaned_header = clean_markdown_for_pdf(line_clean)
-                story.append(Paragraph(cleaned_header, h1_style))
+                story.append(_safe_paragraph(cleaned_header, h1_style))
         elif line_clean.startswith('- ') or line_clean.startswith('* '):
             # Flush any accumulated prose first, then render this bullet as
             # its own Paragraph — joining multiple bullet lines into one
@@ -1767,11 +1813,11 @@ def build_pdf_report(
             if current_text_block:
                 full_para = " ".join(current_text_block)
                 cleaned_para = clean_markdown_for_pdf(full_para)
-                story.append(Paragraph(cleaned_para, body_style))
+                story.append(_safe_paragraph(cleaned_para, body_style))
                 current_text_block = []
             bullet_text = line_clean[2:].strip()
             cleaned_bullet = clean_markdown_for_pdf(bullet_text)
-            story.append(Paragraph(f"• {cleaned_bullet}", body_style))
+            story.append(_safe_paragraph(f"• {cleaned_bullet}", body_style))
         else:
             current_text_block.append(line_clean)
             
@@ -1779,7 +1825,7 @@ def build_pdf_report(
     if current_text_block:
         full_para = " ".join(current_text_block)
         cleaned_para = clean_markdown_for_pdf(full_para)
-        story.append(Paragraph(cleaned_para, body_style))
+        story.append(_safe_paragraph(cleaned_para, body_style))
         
     # Build document
     doc.build(story)

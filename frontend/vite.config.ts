@@ -18,9 +18,8 @@ export default defineConfig({
     host: true,
   },
   define: {
-    // Hard-pinned so a stray shell/system VITE_API_URL env var (which Vite
-    // would otherwise prefer over frontend/.env) can never silently
-    // override the backend URL again.
-    "import.meta.env.VITE_API_URL": JSON.stringify("http://localhost:8001"),
+    "import.meta.env.VITE_API_URL": JSON.stringify(
+      process.env.VITE_API_URL || "http://localhost:8001"
+    ),
   },
 });

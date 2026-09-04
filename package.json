@@ -2,10 +2,14 @@
   "name": "modelforge-ai-root",
   "private": true,
   "workspaces": [
-    "frontend"
+    "./frontend",
+    "./backend",
+    "./sdk"
   ],
   "scripts": {
-    "build": "npm --prefix frontend run build",
-    "dev": "npm --prefix frontend run dev"
+    "build": "npm --prefix ./frontend run build",
+    "dev": "npm --prefix ./frontend run dev",
+    "dev:backend": "cd ./backend && uvicorn app.main:app --reload --port 8001",
+    "test:backend": "cd ./backend && pytest"
   }
 }
